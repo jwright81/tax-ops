@@ -235,7 +235,9 @@ function App() {
   const [intakeForm, setIntakeForm] = useState({ sourcePath: '/data/incoming/sample-scan.pdf', originalFilename: 'sample-scan.pdf', extractedText: '' });
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<DocumentItem | null>(null);
+  const [documentStatusFilter, setDocumentStatusFilter] = useState<'all' | 'intake' | 'review' | 'filed' | 'error'>('review');
   const [reviewDraft, setReviewDraft] = useState({ status: 'review', taxYear: '', formType: '', issuer: '', clientName: '', ssnLast4: '', reviewNotes: '' });
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const isAdmin = me?.role === 'admin';
   const settingsMap = useMemo(() => Object.fromEntries(settings.map((setting) => [setting.key, setting.value])), [settings]);
@@ -273,6 +275,7 @@ function App() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load app data';
       setError(message);
+      setSuccessMessage(null);
       if (message.toLowerCase().includes('invalid token') || message.toLowerCase().includes('missing bearer')) {
         setStoredToken(null);
         setToken(null);
@@ -293,6 +296,7 @@ function App() {
     try {
       const response = await api<{ document: DocumentItem }>(`/api/documents/${documentId}`, {}, token);
       setSelectedDocument(response.document);
+      setSuccessMessage(null);
       setReviewDraft({
         status: response.document.status,
         taxYear: response.document.taxYear ?? '',
@@ -418,6 +422,7 @@ function App() {
     setError(null);
     try {
       await api(`/api/documents/${selectedDocumentId}/review`, { method: 'PATCH', body: JSON.stringify(reviewDraft) }, token);
+      setSuccessMessage(`Document #${selectedDocumentId} saved as ${reviewDraft.status}`);
       await loadData(token);
       await loadDocument(selectedDocumentId);
     } catch (err) {
@@ -449,6 +454,7 @@ function App() {
         </header>
 
         {error ? <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{error}</div> : null}
+        {successMessage ? <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">{successMessage}</div> : null}
 
         <nav className="flex flex-wrap gap-2">
           {([
@@ -596,18 +602,34 @@ function App() {
 
         {activeTab === 'review' ? (
           <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-            <Panel title="Review queue" subtitle="Select a document to inspect and correct metadata">
-              <div className="grid gap-3">
-                {documents.filter((document) => document.status === 'review' || document.status === 'error').map((document) => (
-                  <button key={document.id} className={`rounded-xl border px-4 py-3 text-left ${selectedDocumentId === document.id ? 'border-accent bg-[#10182c]' : 'border-line bg-[#0d1422]'}`} onClick={() => setSelectedDocumentId(document.id)}>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="font-medium">#{document.id} · {document.originalFilename}</div>
-                      <div className="rounded-full border border-line px-2 py-1 text-xs uppercase tracking-[0.12em] text-slate-300">{document.status}</div>
-                    </div>
-                    <div className="mt-2 text-xs text-slate-400">OCR: {document.ocrStatus} · {document.ocrProvider || 'n/a'}</div>
-                    <div className="mt-1 text-sm text-slate-300">{document.currentPath}</div>
+            <Panel title="Document queue" subtitle="Select a document to inspect and correct metadata">
+              <div className="mb-4 flex flex-wrap gap-2">
+                {(['all', 'intake', 'review', 'filed', 'error'] as const).map((status) => (
+                  <button
+                    key={status}
+                    className={`rounded-xl px-3 py-2 text-xs uppercase tracking-[0.12em] ${documentStatusFilter === status ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`}
+                    onClick={() => setDocumentStatusFilter(status)}
+                  >
+                    {status}
                   </button>
                 ))}
+              </div>
+              <div className="grid gap-3">
+                {documents
+                  .filter((document) => documentStatusFilter === 'all' ? true : document.status === documentStatusFilter)
+                  .map((document) => (
+                    <button key={document.id} className={`rounded-xl border px-4 py-3 text-left ${selectedDocumentId === document.id ? 'border-accent bg-[#10182c]' : 'border-line bg-[#0d1422]'}`} onClick={() => setSelectedDocumentId(document.id)}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-medium">#{document.id} · {document.originalFilename}</div>
+                        <div className="rounded-full border border-line px-2 py-1 text-xs uppercase tracking-[0.12em] text-slate-300">{document.status}</div>
+                      </div>
+                      <div className="mt-2 text-xs text-slate-400">OCR: {document.ocrStatus} · {document.ocrProvider || 'n/a'}</div>
+                      <div className="mt-1 text-sm text-slate-300">{document.currentPath}</div>
+                    </button>
+                  ))}
+                {documents.filter((document) => documentStatusFilter === 'all' ? true : document.status === documentStatusFilter).length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No documents in the {documentStatusFilter} queue.</div>
+                ) : null}
               </div>
             </Panel>
 
