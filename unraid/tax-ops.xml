@@ -14,17 +14,34 @@
   <WebUI>http://[IP]:[PORT:3000]</WebUI>
   <Icon>https://raw.githubusercontent.com/jwright81/tax-ops/main/docs/assets/icon.png</Icon>
   <TemplateURL>https://raw.githubusercontent.com/jwright81/tax-ops/main/unraid/tax-ops.xml</TemplateURL>
+
   <Config Name="Web UI Port" Target="3000" Default="3000" Mode="tcp" Description="Port for tax-ops web UI and API" Type="Port" Display="always" Required="true" Mask="false">3000</Config>
-  <Config Name="App Data" Target="/data" Default="/mnt/user/appdata/tax-ops/data" Mode="rw" Description="Tax-ops document storage root" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/tax-ops/data</Config>
+
+  <Config Name="App Data Root" Target="/data" Default="/mnt/user/appdata/tax-ops/data" Mode="rw" Description="Tax-ops app data root" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/tax-ops/data</Config>
+  <Config Name="Incoming Folder" Target="/data/incoming" Default="/mnt/user/documents/tax-ops/data/incoming" Mode="rw" Description="Incoming scanned PDFs" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/incoming</Config>
+  <Config Name="Processed Folder Path" Target="/data/processed" Default="/mnt/user/documents/tax-ops/data/processed" Mode="rw" Description="Processed/OCR output folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/processed</Config>
+  <Config Name="Review Folder Path" Target="/data/review" Default="/mnt/user/documents/tax-ops/data/review" Mode="rw" Description="Review queue folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/review</Config>
+  <Config Name="Clients Folder Path" Target="/data/clients" Default="/mnt/user/documents/tax-ops/data/clients" Mode="rw" Description="Client filing folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/clients</Config>
+  <Config Name="Originals Folder Path" Target="/data/originals" Default="/mnt/user/documents/tax-ops/data/originals" Mode="rw" Description="Original file archive folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/originals</Config>
+
   <Config Name="DB Host" Target="DB_HOST" Default="192.168.1.10" Mode="" Description="MariaDB host or IP" Type="Variable" Display="always" Required="true" Mask="false">192.168.1.10</Config>
   <Config Name="DB Port" Target="DB_PORT" Default="3306" Mode="" Description="MariaDB port" Type="Variable" Display="always" Required="true" Mask="false">3306</Config>
   <Config Name="DB Name" Target="DB_NAME" Default="tax_ops" Mode="" Description="MariaDB database name" Type="Variable" Display="always" Required="true" Mask="false">tax_ops</Config>
   <Config Name="DB User" Target="DB_USER" Default="tax_ops" Mode="" Description="MariaDB username" Type="Variable" Display="always" Required="true" Mask="false">tax_ops</Config>
   <Config Name="DB Password" Target="DB_PASSWORD" Default="" Mode="" Description="MariaDB password" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+
   <Config Name="Bootstrap Admin Username" Target="BOOTSTRAP_ADMIN_USERNAME" Default="admin" Mode="" Description="Initial admin username if no users exist" Type="Variable" Display="always" Required="true" Mask="false">admin</Config>
   <Config Name="Bootstrap Admin Password" Target="BOOTSTRAP_ADMIN_PASSWORD" Default="" Mode="" Description="Initial admin password used on first run" Type="Variable" Display="always" Required="true" Mask="true"></Config>
-  <Config Name="Watch Folder" Target="WATCH_FOLDER" Default="/data/incoming" Mode="" Description="Folder monitored for scanned PDFs" Type="Variable" Display="always" Required="true" Mask="false">/data/incoming</Config>
-  <Config Name="Processed Folder" Target="PROCESSED_FOLDER" Default="/data/processed" Mode="" Description="Processed document output folder" Type="Variable" Display="always" Required="true" Mask="false">/data/processed</Config>
-  <Config Name="Review Folder" Target="REVIEW_FOLDER" Default="/data/review" Mode="" Description="Folder for review-queued documents" Type="Variable" Display="always" Required="true" Mask="false">/data/review</Config>
-  <Config Name="Clients Folder" Target="CLIENTS_FOLDER" Default="/data/clients" Mode="" Description="Client filing root folder" Type="Variable" Display="always" Required="true" Mask="false">/data/clients</Config>
+
+  <Config Name="JWT Secret" Target="JWT_SECRET" Default="" Mode="" Description="JWT signing secret" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Session Secret" Target="SESSION_SECRET" Default="" Mode="" Description="Session secret" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Node Environment" Target="NODE_ENV" Default="production" Mode="" Description="Node environment" Type="Variable" Display="always" Required="true" Mask="false">production</Config>
+  <Config Name="Port" Target="PORT" Default="3000" Mode="" Description="Application port" Type="Variable" Display="always" Required="true" Mask="false">3000</Config>
+  <Config Name="App URL" Target="APP_URL" Default="http://192.168.1.10:3000" Mode="" Description="Base app URL" Type="Variable" Display="always" Required="false" Mask="false">http://192.168.1.10:3000</Config>
+
+  <Config Name="Watch Folder Variable" Target="WATCH_FOLDER" Default="/data/incoming" Mode="" Description="Internal watch folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/incoming</Config>
+  <Config Name="Processed Folder Variable" Target="PROCESSED_FOLDER" Default="/data/processed" Mode="" Description="Internal processed folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/processed</Config>
+  <Config Name="Review Folder Variable" Target="REVIEW_FOLDER" Default="/data/review" Mode="" Description="Internal review folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/review</Config>
+  <Config Name="Clients Folder Variable" Target="CLIENTS_FOLDER" Default="/data/clients" Mode="" Description="Internal clients folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/clients</Config>
+  <Config Name="Originals Folder Variable" Target="ORIGINALS_FOLDER" Default="/data/originals" Mode="" Description="Internal originals folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/originals</Config>
 </Container>

@@ -1,5 +1,5 @@
 #!/bin/sh
 set -eu
 
-node /app/apps/worker/dist/index.js &
-exec node /app/apps/server/dist/index.js
+node /app/apps/worker/dist/apps/worker/src/index.js &
+exec node /app/apps/server/dist/apps/server/src/index.js
