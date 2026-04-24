@@ -10,7 +10,7 @@ import { listSettings, upsertSettings } from '../modules/settings.js';
 import { createUser, getUserById, listUsers, recordAudit, resetUserPassword, updateUser } from '../modules/users.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const webDistPath = path.resolve(__dirname, '../../../../../apps/web/dist');
+const webDistPath = path.resolve(__dirname, '../../../../../../../apps/web/dist');
 
 const createUserSchema = z.object({
   username: z.string().min(3).max(100),
