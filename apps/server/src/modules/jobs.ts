@@ -1,4 +1,4 @@
-import { buildDocumentFilename } from '@tax-ops/shared';
+import { buildDocumentFilename } from '../../../../packages/shared/src/naming/document.js';
 import { pool } from '../db/pool.js';
 
 function mapDocument(row: any) {

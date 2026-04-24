@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { envSchema } from '@tax-ops/shared';
+import { envSchema } from '../../../../packages/shared/src/schemas/env.js';
 
 dotenv.config({ path: process.env.CONFIG_PATH || '.env' });
 
