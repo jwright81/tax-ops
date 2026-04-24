@@ -13,11 +13,11 @@ export const envSchema = z.object({
   DB_PASSWORD: z.string().min(1),
   BOOTSTRAP_ADMIN_USERNAME: z.string().min(1).default('admin'),
   BOOTSTRAP_ADMIN_PASSWORD: z.string().min(8),
-  WATCH_FOLDER: z.string().min(1),
-  PROCESSED_FOLDER: z.string().min(1),
-  REVIEW_FOLDER: z.string().min(1),
-  CLIENTS_FOLDER: z.string().min(1),
-  ORIGINALS_FOLDER: z.string().min(1),
+  WATCH_FOLDER: z.string().min(1).default('/data/incoming'),
+  PROCESSED_FOLDER: z.string().min(1).default('/data/processed'),
+  REVIEW_FOLDER: z.string().min(1).default('/data/review'),
+  CLIENTS_FOLDER: z.string().min(1).default('/data/clients'),
+  ORIGINALS_FOLDER: z.string().min(1).default('/data/originals'),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

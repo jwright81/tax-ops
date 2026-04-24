@@ -19,10 +19,10 @@
 
   <Config Name="App Data Root" Target="/data" Default="/mnt/user/appdata/tax-ops/data" Mode="rw" Description="Tax-ops app data root" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/tax-ops/data</Config>
   <Config Name="Incoming Folder" Target="/data/incoming" Default="/mnt/user/documents/tax-ops/data/incoming" Mode="rw" Description="Incoming scanned PDFs" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/incoming</Config>
-  <Config Name="Processed Folder Path" Target="/data/processed" Default="/mnt/user/documents/tax-ops/data/processed" Mode="rw" Description="Processed/OCR output folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/processed</Config>
-  <Config Name="Review Folder Path" Target="/data/review" Default="/mnt/user/documents/tax-ops/data/review" Mode="rw" Description="Review queue folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/review</Config>
-  <Config Name="Clients Folder Path" Target="/data/clients" Default="/mnt/user/documents/tax-ops/data/clients" Mode="rw" Description="Client filing folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/clients</Config>
-  <Config Name="Originals Folder Path" Target="/data/originals" Default="/mnt/user/documents/tax-ops/data/originals" Mode="rw" Description="Original file archive folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/originals</Config>
+  <Config Name="Processed Folder" Target="/data/processed" Default="/mnt/user/documents/tax-ops/data/processed" Mode="rw" Description="Processed/OCR output folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/processed</Config>
+  <Config Name="Review Folder" Target="/data/review" Default="/mnt/user/documents/tax-ops/data/review" Mode="rw" Description="Review queue folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/review</Config>
+  <Config Name="Clients Folder" Target="/data/clients" Default="/mnt/user/documents/tax-ops/data/clients" Mode="rw" Description="Client filing folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/clients</Config>
+  <Config Name="Originals Folder" Target="/data/originals" Default="/mnt/user/documents/tax-ops/data/originals" Mode="rw" Description="Original file archive folder" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/documents/tax-ops/data/originals</Config>
 
   <Config Name="DB Host" Target="DB_HOST" Default="192.168.1.10" Mode="" Description="MariaDB host or IP" Type="Variable" Display="always" Required="true" Mask="false">192.168.1.10</Config>
   <Config Name="DB Port" Target="DB_PORT" Default="3306" Mode="" Description="MariaDB port" Type="Variable" Display="always" Required="true" Mask="false">3306</Config>
@@ -39,9 +39,6 @@
   <Config Name="Port" Target="PORT" Default="3000" Mode="" Description="Application port" Type="Variable" Display="always" Required="true" Mask="false">3000</Config>
   <Config Name="App URL" Target="APP_URL" Default="http://192.168.1.10:3000" Mode="" Description="Base app URL" Type="Variable" Display="always" Required="false" Mask="false">http://192.168.1.10:3000</Config>
 
-  <Config Name="Watch Folder Variable" Target="WATCH_FOLDER" Default="/data/incoming" Mode="" Description="Internal watch folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/incoming</Config>
-  <Config Name="Processed Folder Variable" Target="PROCESSED_FOLDER" Default="/data/processed" Mode="" Description="Internal processed folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/processed</Config>
-  <Config Name="Review Folder Variable" Target="REVIEW_FOLDER" Default="/data/review" Mode="" Description="Internal review folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/review</Config>
-  <Config Name="Clients Folder Variable" Target="CLIENTS_FOLDER" Default="/data/clients" Mode="" Description="Internal clients folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/clients</Config>
-  <Config Name="Originals Folder Variable" Target="ORIGINALS_FOLDER" Default="/data/originals" Mode="" Description="Internal originals folder path" Type="Variable" Display="advanced" Required="true" Mask="false">/data/originals</Config>
+  <Config Name="OCR Mode" Target="OCR_MODE" Default="external" Mode="" Description="OCR mode override (optional)" Type="Variable" Display="advanced" Required="false" Mask="false">external</Config>
+  <Config Name="OCR Command" Target="OCR_COMMAND" Default="ocrmypdf --rotate-pages --deskew --force-ocr &quot;{input}&quot; &quot;{output}&quot;" Mode="" Description="OCR command override (optional)" Type="Variable" Display="advanced" Required="false" Mask="false">ocrmypdf --rotate-pages --deskew --force-ocr &quot;{input}&quot; &quot;{output}&quot;</Config>
 </Container>
