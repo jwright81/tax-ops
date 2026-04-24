@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import bcrypt from 'bcryptjs';
 import { authenticate } from '../auth/login.js';
 import { type AuthenticatedRequest, requireAdmin, requireAuth } from '../auth/requireAuth.js';
 import { pool } from '../db/pool.js';
@@ -27,6 +28,11 @@ const updateUserSchema = z.object({
 
 const resetPasswordSchema = z.object({
   password: z.string().min(8).max(100),
+});
+
+const changeOwnPasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8).max(100),
 });
 
 const settingsSchema = z.object({
@@ -86,6 +92,40 @@ export function createApp() {
     res.json(session);
   });
 
+  app.post('/api/auth/change-password', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const parsed = changeOwnPasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      const rows = await conn.query('SELECT id, password_hash FROM users WHERE id = ? LIMIT 1', [req.auth!.userId]);
+      const user = Array.isArray(rows) ? rows[0] : null;
+      if (!user) {
+        res.status(404).json({ error: 'user not found' });
+        return;
+      }
+
+      const matches = await bcrypt.compare(parsed.data.currentPassword, user.password_hash);
+      if (!matches) {
+        res.status(401).json({ error: 'current password is incorrect' });
+        return;
+      }
+
+      const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
+      await conn.query(
+        'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
+        [passwordHash, req.auth!.userId],
+      );
+      await recordAudit(req.auth!.userId, 'auth.change_password', 'user', String(req.auth!.userId), { selfService: true });
+      res.json({ ok: true });
+    } finally {
+      conn.release();
+    }
+  });
+
   app.get('/api/bootstrap/status', async (_req, res) => {
     const conn = await pool.getConnection();
     try {
@@ -132,6 +172,11 @@ export function createApp() {
     const userId = Number(req.params.id);
     if (!Number.isFinite(userId)) {
       res.status(400).json({ error: 'invalid user id' });
+      return;
+    }
+
+    if (userId === req.auth!.userId && req.body?.active === false) {
+      res.status(400).json({ error: 'admin cannot disable their own account' });
       return;
     }
 

@@ -17,6 +17,19 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    tesseract-ocr \
+    qpdf \
+    ghostscript \
+    pngquant \
+    unpaper \
+  && pip3 install --no-cache-dir ocrmypdf \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/server/dist ./apps/server/dist

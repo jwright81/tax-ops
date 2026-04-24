@@ -104,8 +104,8 @@ function Panel(props: React.PropsWithChildren<{ title: string; subtitle?: string
 }
 
 function LoginScreen({ onLogin }: { onLogin: (session: LoginResponse) => void }) {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('changeme123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -135,7 +135,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: LoginResponse) => void })
           <p className="mt-3 text-sm text-slate-300">Sign in to manage users, settings, intake jobs, and office workflows.</p>
         </div>
 
-        <Panel title="Login" subtitle="Bootstrap auth flow for MVP">
+        <Panel title="Login" subtitle="Secure sign-in for office staff">
           <form className="grid gap-4" onSubmit={handleSubmit}>
             <label className="grid gap-2 text-sm">
               <span className="text-slate-300">Username</span>
@@ -148,6 +148,69 @@ function LoginScreen({ onLogin }: { onLogin: (session: LoginResponse) => void })
             {error ? <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</div> : null}
             <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={busy} type="submit">
               {busy ? 'Signing in…' : 'Sign in'}
+            </button>
+          </form>
+        </Panel>
+      </div>
+    </main>
+  );
+}
+
+function ChangePasswordScreen({ token, user, onComplete }: { token: string; user: User; onComplete: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+    if (newPassword !== confirmPassword) {
+      setError('New passwords do not match');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await api('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      }, token);
+      onComplete();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to change password');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="min-h-screen bg-bg px-6 py-10 text-text">
+      <div className="mx-auto grid max-w-md gap-6">
+        <div>
+          <div className="text-xs uppercase tracking-[0.16em] text-muted">password update required</div>
+          <h1 className="mt-2 text-4xl font-semibold tracking-tight">Change password</h1>
+          <p className="mt-3 text-sm text-slate-300">{user.username}, you need to change your temporary password before continuing.</p>
+        </div>
+
+        <Panel title="Set a new password" subtitle="Required before app access">
+          <form className="grid gap-4" onSubmit={handleSubmit}>
+            <label className="grid gap-2 text-sm">
+              <span className="text-slate-300">Current password</span>
+              <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2 outline-none focus:border-accent" type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
+            </label>
+            <label className="grid gap-2 text-sm">
+              <span className="text-slate-300">New password</span>
+              <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2 outline-none focus:border-accent" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+            </label>
+            <label className="grid gap-2 text-sm">
+              <span className="text-slate-300">Confirm new password</span>
+              <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2 outline-none focus:border-accent" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+            </label>
+            {error ? <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</div> : null}
+            <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={busy} type="submit">
+              {busy ? 'Saving…' : 'Update password'}
             </button>
           </form>
         </Panel>
@@ -176,6 +239,7 @@ function App() {
 
   const isAdmin = me?.role === 'admin';
   const settingsMap = useMemo(() => Object.fromEntries(settings.map((setting) => [setting.key, setting.value])), [settings]);
+  const officeName = settingsMap.office_name || 'Tax Office';
 
   async function loadData(activeToken = token) {
     if (!activeToken) return;
@@ -270,9 +334,14 @@ function App() {
         onLogin={(session) => {
           setStoredToken(session.token);
           setToken(session.token);
+          setMe(session.user);
         }}
       />
     );
+  }
+
+  if (me?.mustChangePassword) {
+    return <ChangePasswordScreen token={token} user={me} onComplete={() => void loadData(token)} />;
   }
 
   async function createUserSubmit(event: FormEvent) {
@@ -361,7 +430,7 @@ function App() {
       <div className="mx-auto grid max-w-7xl gap-6">
         <header className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <div className="text-xs uppercase tracking-[0.16em] text-muted">tax office ops</div>
+            <div className="text-xs uppercase tracking-[0.16em] text-muted">{officeName}</div>
             <h1 className="mt-2 text-4xl font-semibold tracking-tight">tax-ops</h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-300">MVP control panel for auth, settings, intake jobs, review, and document pipeline foundation.</p>
           </div>
@@ -455,7 +524,7 @@ function App() {
                       <tr key={user.id}>
                         <td className="px-4 py-4"><div className="font-medium text-text">{user.username}</div><div className="text-xs text-slate-400">ID {user.id}</div></td>
                         <td className="px-4 py-4"><select className="rounded-lg border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} value={user.role} onChange={(event) => void patchUser(user.id, { role: event.target.value as UserRole })}><option value="admin">admin</option><option value="staff">staff</option></select></td>
-                        <td className="px-4 py-4"><label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={user.active} disabled={!isAdmin} onChange={(event) => void patchUser(user.id, { active: event.target.checked })} />active</label>{user.mustChangePassword ? <div className="mt-2 text-xs text-amber-300">must reset password</div> : null}</td>
+                        <td className="px-4 py-4"><label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={user.active} disabled={!isAdmin || user.id === me?.id} onChange={(event) => void patchUser(user.id, { active: event.target.checked })} />active</label>{user.mustChangePassword ? <div className="mt-2 text-xs text-amber-300">must reset password</div> : null}{user.id === me?.id ? <div className="mt-2 text-xs text-slate-500">self-disable blocked</div> : null}</td>
                         <td className="px-4 py-4 text-slate-300">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never'}</td>
                         <td className="px-4 py-4"><div className="grid gap-2"><div className="flex gap-2"><input className="min-w-0 flex-1 rounded-lg border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="new password" type="password" value={resetMap[user.id] ?? ''} onChange={(event) => setResetMap((current) => ({ ...current, [user.id]: event.target.value }))} /><button className="rounded-lg border border-line px-3 py-2 text-xs hover:bg-white/5 disabled:opacity-50" disabled={!isAdmin} onClick={() => void resetPassword(user.id)}>Reset</button></div><button className="text-left text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50" disabled={!isAdmin} onClick={() => void patchUser(user.id, { mustChangePassword: !user.mustChangePassword })}>Toggle force password change</button></div></td>
                       </tr>
@@ -493,10 +562,10 @@ function App() {
 
             <Panel title="OCR setup notes" subtitle="Needed before live Unraid OCR testing">
               <ul className="grid gap-3 text-sm text-slate-300">
-                <li>• Install OCR tools in the runtime image/container.</li>
+                <li>• OCR tools are now intended to be bundled into the runtime image.</li>
                 <li>• Confirm the watched folder and OCR output folder are mounted and writable.</li>
                 <li>• Keep <span className="text-slate-100">ocr_mode=external</span> to use the configured command.</li>
-                <li>• If testing before OCR tools are present, temporarily switch <span className="text-slate-100">ocr_mode</span> away from external or expect failures.</li>
+                <li>• If OCR still fails, logs should now be more about runtime/package issues than missing app plumbing.</li>
               </ul>
             </Panel>
           </section>
@@ -516,7 +585,7 @@ function App() {
             <Panel title="First Unraid test milestone" subtitle="What to validate once you install the container there">
               <ol className="grid gap-3 text-sm text-slate-300 list-decimal pl-5">
                 <li>Set DB host/port/user/password and mounted folders.</li>
-                <li>Ensure OCR tools are present if using external OCR mode.</li>
+                <li>Confirm OCR tools exist in the runtime image.</li>
                 <li>Open the web UI and confirm login works with bootstrap admin.</li>
                 <li>Drop a sample scanned PDF into the watched folder.</li>
                 <li>Verify job appears, worker processes it, and document lands in review.</li>
