@@ -554,7 +554,7 @@ function App() {
 
         {activeTab === 'settings' ? (
           <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-            <Panel title="System settings" subtitle="Admin-editable operational config persisted in MariaDB">
+            <Panel title="Office settings" subtitle="Only true office-level settings live here; system paths stay container-controlled">
               <form className="grid gap-4 md:grid-cols-2" onSubmit={saveSettings}>
                 {settings.map((setting) => (
                   <label className="grid gap-2 text-sm" key={setting.key}>
@@ -566,12 +566,12 @@ function App() {
               </form>
             </Panel>
 
-            <Panel title="OCR setup notes" subtitle="Needed before live Unraid OCR testing">
+            <Panel title="System notes" subtitle="Filesystem paths and OCR execution are now container-controlled">
               <ul className="grid gap-3 text-sm text-slate-300">
-                <li>• OCR tools are now intended to be bundled into the runtime image.</li>
-                <li>• Confirm the watched folder and OCR output folder are mounted and writable.</li>
-                <li>• Keep <span className="text-slate-100">ocr_mode=external</span> to use the configured command.</li>
-                <li>• If OCR still fails, logs should now be more about runtime/package issues than missing app plumbing.</li>
+                <li>• Incoming, processed, review, clients, and originals paths are fixed by container/env configuration.</li>
+                <li>• OCR command is no longer meant to be edited in the GUI.</li>
+                <li>• If a file stalls in processing, check worker logs for the next OCR or file-write step.</li>
+                <li>• Office settings here should stay small and human-meaningful.</li>
               </ul>
             </Panel>
           </section>

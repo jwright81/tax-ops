@@ -16,6 +16,8 @@ const env = {
   DB_USER: process.env.DB_USER || 'tax_ops',
   DB_PASSWORD: process.env.DB_PASSWORD || '',
   WATCH_FOLDER: process.env.WATCH_FOLDER || '/data/incoming',
+  PROCESSED_FOLDER: process.env.PROCESSED_FOLDER || '/data/processed',
+  OCR_COMMAND: process.env.OCR_COMMAND || '/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"',
 };
 
 const pool = mariadb.createPool({
@@ -167,32 +169,17 @@ function renderCommand(template: string, inputPath: string, outputPath: string) 
   return template.replaceAll('{input}', inputPath).replaceAll('{output}', outputPath);
 }
 
-async function runOcrStep(sourcePath: string, fileName: string, settings: Record<string, string>) {
-  const ocrMode = settings.ocr_mode || 'external';
-  const outputRoot = settings.ocr_output_folder || '/data/processed/ocr';
+async function runOcrStep(sourcePath: string, fileName: string) {
+  const outputRoot = path.join(env.PROCESSED_FOLDER, 'ocr');
   await fs.mkdir(outputRoot, { recursive: true });
   const outputPath = path.join(outputRoot, fileName);
-
-  if (ocrMode === 'external') {
-    const template = settings.ocr_command || '/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"';
-    const command = renderCommand(template, sourcePath, outputPath);
-    const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
-    return {
-      provider: 'external:ocrmypdf',
-      extractedText: `OCR completed for ${fileName}. Output written to ${outputPath}.`,
-      notes: stderr?.trim() || stdout?.trim() || 'External OCR command completed.',
-      outputPath,
-    };
-  }
-
-  const exists = await fs.access(sourcePath).then(() => true).catch(() => false);
+  const command = renderCommand(env.OCR_COMMAND, sourcePath, outputPath);
+  const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
   return {
-    provider: 'placeholder-worker',
-    extractedText: exists
-      ? `Placeholder OCR complete for ${fileName}. Real OCR pipeline pending integration.`
-      : `Source file not reachable at worker runtime for ${fileName}; placeholder OCR fallback used.`,
-    notes: exists ? 'OCR placeholder completed; ready for human review.' : 'OCR placeholder used without file access; verify mount path before production use.',
-    outputPath: sourcePath,
+    provider: 'external:ocrmypdf',
+    extractedText: `OCR completed for ${fileName}. Output written to ${outputPath}.`,
+    notes: stderr?.trim() || stdout?.trim() || 'External OCR command completed.',
+    outputPath,
   };
 }
 
@@ -218,11 +205,11 @@ async function processQueuedJobs() {
   for (const job of jobs) {
     try {
       await updateJobStatus(job.id, 'processing', 'Worker picked up job');
-      await markDocumentOcr(job.id, 'processing', settings.ocr_mode === 'external' ? 'external:ocrmypdf' : 'placeholder-worker');
+      await markDocumentOcr(job.id, 'processing', 'external:ocrmypdf');
       const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
       const originalFilename = payload.originalFilename || path.basename(job.source_path);
       const inferred = inferMetadata(originalFilename);
-      const ocr = await runOcrStep(job.source_path, originalFilename, settings);
+      const ocr = await runOcrStep(job.source_path, originalFilename);
       await updateDocument(job.id, {
         status: 'review',
         ...inferred,
@@ -235,7 +222,7 @@ async function processQueuedJobs() {
       await updateJobStatus(job.id, 'completed', 'OCR/classification step complete', { ...inferred, ocrProvider: ocr.provider, outputPath: ocr.outputPath });
       console.log(`[worker] completed job #${job.id} (${originalFilename})`);
     } catch (error) {
-      await markDocumentOcr(job.id, 'failed', 'external-or-placeholder');
+      await markDocumentOcr(job.id, 'failed', 'external:ocrmypdf');
       await updateDocument(job.id, {
         status: 'error',
         formType: 'Error',
@@ -245,9 +232,9 @@ async function processQueuedJobs() {
         ssnLast4: '',
         confidenceScore: 0,
         extractedText: '',
-        currentPath: 'error.pdf',
+        currentPath: job.source_path,
         ocrStatus: 'failed',
-        ocrProvider: 'external-or-placeholder',
+        ocrProvider: 'external:ocrmypdf',
         reviewNotes: `Worker failed: ${String(error)}`,
       });
       await updateJobStatus(job.id, 'failed', `Worker error: ${String(error)}`);
@@ -263,16 +250,16 @@ async function tick() {
 
 async function main() {
   console.log('tax-ops worker bootstrap started');
-  console.log('watch folder:', env.WATCH_FOLDER);
+  console.log(`watch folder: ${env.WATCH_FOLDER}`);
   await waitForSettingsTable();
   console.log('[worker] settings table ready');
   await tick();
   setInterval(() => {
     void tick();
-  }, 15000);
+  }, 4000);
 }
 
-main().catch((error) => {
-  console.error('worker fatal error', error);
-  process.exit(1);
+void main().catch((error) => {
+  console.error('tax-ops worker fatal error', error);
+  process.exitCode = 1;
 });
