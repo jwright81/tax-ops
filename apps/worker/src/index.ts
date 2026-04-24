@@ -27,6 +27,26 @@ const pool = mariadb.createPool({
   connectionLimit: 4,
 });
 
+async function waitForSettingsTable(retries = 20) {
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    const conn = await pool.getConnection().catch(() => null);
+    if (!conn) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      continue;
+    }
+
+    try {
+      await conn.query('SELECT setting_key, setting_value FROM system_settings LIMIT 1');
+      conn.release();
+      return;
+    } catch (error) {
+      conn.release();
+      if (attempt === retries) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+}
+
 async function getSettingsMap() {
   const conn = await pool.getConnection();
   try {
@@ -244,6 +264,8 @@ async function tick() {
 async function main() {
   console.log('tax-ops worker bootstrap started');
   console.log('watch folder:', env.WATCH_FOLDER);
+  await waitForSettingsTable();
+  console.log('[worker] settings table ready');
   await tick();
   setInterval(() => {
     void tick();

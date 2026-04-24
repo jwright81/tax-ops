@@ -259,7 +259,11 @@ export function createApp() {
   });
 
   app.use(express.static(webDistPath));
-  app.get('*', (_req, res) => {
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api/') || req.path === '/health') {
+      next();
+      return;
+    }
     res.sendFile(path.join(webDistPath, 'index.html'));
   });
 
