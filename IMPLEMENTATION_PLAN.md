@@ -235,6 +235,7 @@ Make the app reliable, maintainable, and easy to deploy/update in the office.
 - [x] Manual intake job/document foundation
 - [x] Watched-folder worker loop + placeholder job processing
 - [x] Review queue + document detail editing UI/API
+- [x] Unraid first-run deployment/test documentation
 - [ ] OCR pipeline
 - [x] Review workflow
 - [ ] Client filing

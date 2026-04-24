@@ -173,6 +173,8 @@ This repository will maintain living docs for planning and implementation:
 - `README.md` — project overview and operating assumptions
 - `PROJECT_STRUCTURE.md` — canonical repo layout and file responsibilities
 - `IMPLEMENTATION_PLAN.md` — phased build plan with progress tracking
+- `docs/deployment/UNRAID_FIRST_RUN.md` — first practical Unraid deployment and validation checklist
+- `docs/deployment/OCR_RUNTIME_REQUIREMENTS.md` — OCR binary/runtime requirements for external OCR mode
 
 These docs should be updated as decisions change and as project phases are completed.
 
