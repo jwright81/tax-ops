@@ -142,6 +142,7 @@ Primary production target. The app should run as a single Docker container with 
 - manual intake job creation UI/API already scaffolded as a stepping stone toward automated watched-folder intake
 - worker now includes watched-folder scan + placeholder OCR/classification loop so intake records can advance to a review state
 - documents now track OCR status/provider, extracted text, and review notes for a more realistic review workflow
+- UI now surfaces OCR readiness guidance and first Unraid-side validation steps for the external OCR runtime path
 
 ### Phase 3 — Review + classification
 - review queue
@@ -183,7 +184,7 @@ Current scaffold in repo:
 - React + TypeScript + Vite + Tailwind web foundation with compact dashboard shell
 - TypeScript API scaffold with MariaDB config, migrations, bootstrap admin seeding, login endpoint, and admin user-management endpoints
 - TypeScript worker scaffold for intake/OCR runtime, now with watched-folder discovery and placeholder processing flow
-- React admin UI for login, current session view, user management, settings, manual intake job creation, and review queue/detail editing
+- React admin UI for login, current session view, user management, settings, manual intake job creation, OCR/runtime guidance, and review queue/detail editing
 - shared package for env schema, auth types, and document filename builder
 - single-container Docker entrypoint that starts worker + server and serves built frontend assets
 - development compose file

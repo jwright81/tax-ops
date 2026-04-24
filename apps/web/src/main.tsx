@@ -32,6 +32,7 @@ interface Job {
   status: string;
   sourcePath: string;
   message: string | null;
+  resultJson?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -174,6 +175,7 @@ function App() {
   const [reviewDraft, setReviewDraft] = useState({ status: 'review', taxYear: '', formType: '', issuer: '', clientName: '', ssnLast4: '', reviewNotes: '' });
 
   const isAdmin = me?.role === 'admin';
+  const settingsMap = useMemo(() => Object.fromEntries(settings.map((setting) => [setting.key, setting.value])), [settings]);
 
   async function loadData(activeToken = token) {
     if (!activeToken) return;
@@ -257,6 +259,7 @@ function App() {
       resets: users.filter((user) => user.mustChangePassword).length,
       queuedJobs: jobs.filter((job) => job.status === 'queued').length,
       reviewDocs: documents.filter((doc) => doc.status === 'review').length,
+      failedOcr: documents.filter((doc) => doc.ocrStatus === 'failed').length,
     }),
     [users, jobs, documents],
   );
@@ -394,7 +397,7 @@ function App() {
 
         {activeTab === 'overview' ? (
           <>
-            <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-6">
+            <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-7">
               {[
                 ['Users', String(stats.totalUsers), 'Total accounts'],
                 ['Admins', String(stats.admins), 'Admin-capable accounts'],
@@ -402,6 +405,7 @@ function App() {
                 ['Forced Reset', String(stats.resets), 'Must change password'],
                 ['Queued Jobs', String(stats.queuedJobs), 'Intake queue'],
                 ['Review Docs', String(stats.reviewDocs), 'Needs document review'],
+                ['OCR Failures', String(stats.failedOcr), 'Need OCR/runtime attention'],
               ].map(([label, value, hint]) => (
                 <article key={label} className="rounded-2xl border border-line bg-panel p-5">
                   <div className="text-xs uppercase tracking-[0.12em] text-muted">{label}</div>
@@ -412,7 +416,7 @@ function App() {
             </section>
 
             <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-              <Panel title="Recent processing jobs" subtitle="MVP intake/job queue visibility" actions={<div className="rounded-full border border-line px-3 py-2 text-xs uppercase tracking-[0.12em] text-muted">{loading ? 'Refreshing…' : `${jobs.length} loaded`}</div>}>
+              <Panel title="Recent processing jobs" subtitle="Watch queue, OCR execution, and failures" actions={<div className="rounded-full border border-line px-3 py-2 text-xs uppercase tracking-[0.12em] text-muted">{loading ? 'Refreshing…' : `${jobs.length} loaded`}</div>}>
                 <div className="grid gap-3">
                   {jobs.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-6 text-sm text-slate-400">No jobs queued yet.</div> : null}
                   {jobs.map((job) => (
@@ -428,22 +432,13 @@ function App() {
                 </div>
               </Panel>
 
-              <Panel title="Recent documents" subtitle="Document registry foundation with OCR/review state">
-                <div className="grid gap-3">
-                  {documents.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-6 text-sm text-slate-400">No documents recorded yet.</div> : null}
-                  {documents.map((document) => (
-                    <button key={document.id} className="rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-left hover:border-accent" onClick={() => { setActiveTab('review'); setSelectedDocumentId(document.id); }}>
-                      <div className="font-medium">#{document.id} · {document.originalFilename}</div>
-                      <div className="mt-1 text-sm text-slate-300">{document.currentPath}</div>
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-400">
-                        <span>Status: {document.status}</span>
-                        <span>OCR: {document.ocrStatus}</span>
-                        {document.formType ? <span>Form: {document.formType}</span> : null}
-                        {document.clientName ? <span>Client: {document.clientName}</span> : null}
-                      </div>
-                    </button>
-                  ))}
-                </div>
+              <Panel title="OCR runtime readiness" subtitle="What the worker expects when external OCR is enabled">
+                <ul className="grid gap-3 text-sm text-slate-300">
+                  <li>• <span className="text-slate-100">ocr_mode</span>: {settingsMap.ocr_mode || 'unset'}</li>
+                  <li>• <span className="text-slate-100">ocr_command</span>: <code className="text-xs text-slate-200">{settingsMap.ocr_command || 'unset'}</code></li>
+                  <li>• <span className="text-slate-100">ocr_output_folder</span>: {settingsMap.ocr_output_folder || 'unset'}</li>
+                  <li>• External OCR mode requires tools like <span className="text-slate-100">ocrmypdf</span>, <span className="text-slate-100">tesseract</span>, and usually <span className="text-slate-100">qpdf</span> in the runtime.</li>
+                </ul>
               </Panel>
             </section>
           </>
@@ -483,17 +478,28 @@ function App() {
         ) : null}
 
         {activeTab === 'settings' ? (
-          <Panel title="System settings" subtitle="Admin-editable operational config persisted in MariaDB">
-            <form className="grid gap-4 md:grid-cols-2" onSubmit={saveSettings}>
-              {settings.map((setting) => (
-                <label className="grid gap-2 text-sm" key={setting.key}>
-                  <span className="text-slate-300">{setting.key}</span>
-                  <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, [setting.key]: event.target.value }))} />
-                </label>
-              ))}
-              <div className="md:col-span-2"><button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={!isAdmin} type="submit">Save settings</button></div>
-            </form>
-          </Panel>
+          <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+            <Panel title="System settings" subtitle="Admin-editable operational config persisted in MariaDB">
+              <form className="grid gap-4 md:grid-cols-2" onSubmit={saveSettings}>
+                {settings.map((setting) => (
+                  <label className="grid gap-2 text-sm" key={setting.key}>
+                    <span className="text-slate-300">{setting.key}</span>
+                    <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, [setting.key]: event.target.value }))} />
+                  </label>
+                ))}
+                <div className="md:col-span-2"><button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={!isAdmin} type="submit">Save settings</button></div>
+              </form>
+            </Panel>
+
+            <Panel title="OCR setup notes" subtitle="Needed before live Unraid OCR testing">
+              <ul className="grid gap-3 text-sm text-slate-300">
+                <li>• Install OCR tools in the runtime image/container.</li>
+                <li>• Confirm the watched folder and OCR output folder are mounted and writable.</li>
+                <li>• Keep <span className="text-slate-100">ocr_mode=external</span> to use the configured command.</li>
+                <li>• If testing before OCR tools are present, temporarily switch <span className="text-slate-100">ocr_mode</span> away from external or expect failures.</li>
+              </ul>
+            </Panel>
+          </section>
         ) : null}
 
         {activeTab === 'intake' ? (
@@ -507,13 +513,14 @@ function App() {
               </form>
             </Panel>
 
-            <Panel title="Intake notes" subtitle="Current MVP behavior">
-              <ul className="grid gap-3 text-sm text-slate-300">
-                <li>• Watched-folder worker can auto-discover PDFs and create jobs.</li>
-                <li>• Worker now marks OCR placeholder status and pushes documents into review state.</li>
-                <li>• Manual job creation remains useful for testing before live NAS monitoring.</li>
-                <li>• Next real upgrade is swapping placeholder OCR with actual OCR tooling.</li>
-              </ul>
+            <Panel title="First Unraid test milestone" subtitle="What to validate once you install the container there">
+              <ol className="grid gap-3 text-sm text-slate-300 list-decimal pl-5">
+                <li>Set DB host/port/user/password and mounted folders.</li>
+                <li>Ensure OCR tools are present if using external OCR mode.</li>
+                <li>Open the web UI and confirm login works with bootstrap admin.</li>
+                <li>Drop a sample scanned PDF into the watched folder.</li>
+                <li>Verify job appears, worker processes it, and document lands in review.</li>
+              </ol>
             </Panel>
           </section>
         ) : null}
@@ -557,7 +564,7 @@ function App() {
 
                   <label className="grid gap-2 text-sm"><span className="text-slate-300">Review notes</span><textarea className="min-h-32 rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.reviewNotes} onChange={(event) => setReviewDraft((current) => ({ ...current, reviewNotes: event.target.value }))} /></label>
 
-                  <Panel title="Extracted text" subtitle="Placeholder OCR output for now">
+                  <Panel title="Extracted text" subtitle="OCR output or failure context">
                     <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-xs text-slate-300">{selectedDocument.extractedText || 'No extracted text available yet.'}</pre>
                   </Panel>
 
