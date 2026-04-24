@@ -1,0 +1,28 @@
+{
+  "name": "tax-ops",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tax office document intake, OCR, classification, and operations app",
+  "packageManager": "npm@10.9.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:server dev:worker dev:web",
+    "dev:web": "npm --workspace @tax-ops/web run dev",
+    "dev:server": "npm --workspace @tax-ops/server run dev",
+    "dev:worker": "npm --workspace @tax-ops/worker run dev",
+    "build": "npm run build:shared && npm run build:web && npm run build:server && npm run build:worker",
+    "build:web": "npm --workspace @tax-ops/web run build",
+    "build:server": "npm --workspace @tax-ops/server run build",
+    "build:worker": "npm --workspace @tax-ops/worker run build",
+    "build:shared": "npm --workspace @tax-ops/shared run build",
+    "start": "node apps/server/dist/index.js",
+    "lint": "echo 'lint pending'",
+    "test": "echo 'test pending'"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5"
+  }
+}

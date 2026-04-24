@@ -1,0 +1,11 @@
+services:
+  tax-ops:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - ../.env.example
+    volumes:
+      - ../examples/sample-data:/data
