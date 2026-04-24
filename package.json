@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Tax office document intake, OCR, classification, and operations app",
   "packageManager": "npm@10.9.2",
+  "type": "module",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -18,7 +19,7 @@
     "build:server": "npm --workspace @tax-ops/server run build",
     "build:worker": "npm --workspace @tax-ops/worker run build",
     "build:shared": "npm --workspace @tax-ops/shared run build",
-    "start": "node apps/server/dist/index.js",
+    "start": "node apps/server/dist/apps/server/src/index.js",
     "lint": "echo 'lint pending'",
     "test": "echo 'test pending'"
   },

@@ -22,6 +22,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/server/dist ./apps/server/dist
 COPY --from=build /app/apps/worker/dist ./apps/worker/dist
 COPY --from=build /app/apps/web/dist ./apps/web/dist
+COPY --from=build /app/packages ./packages
 COPY --from=build /app/README.md ./
 COPY --from=build /app/IMPLEMENTATION_PLAN.md ./
 COPY --from=build /app/PROJECT_STRUCTURE.md ./
