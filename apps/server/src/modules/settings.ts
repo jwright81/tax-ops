@@ -13,6 +13,9 @@ const defaultSettings: Record<string, string> = {
   clients_folder: '/data/clients',
   originals_folder: '/data/originals',
   auto_create_jobs: 'true',
+  ocr_mode: 'external',
+  ocr_command: 'ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"',
+  ocr_output_folder: '/data/processed/ocr',
 };
 
 export async function ensureDefaultSettings() {
@@ -57,4 +60,9 @@ export async function upsertSettings(settings: SystemSetting[]) {
   } finally {
     conn.release();
   }
+}
+
+export async function getSettingsMap() {
+  const settings = await listSettings();
+  return Object.fromEntries(settings.map((setting) => [setting.key, setting.value]));
 }

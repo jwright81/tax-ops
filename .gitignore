@@ -12,5 +12,12 @@ coverage/
 .vite/
 *.sqlite
 pnpm-lock.yaml
-package-lock.json
 yarn.lock
+apps/*/dist/
+packages/*/dist/
+packages/shared/src/*.js
+packages/shared/src/*.d.ts
+packages/shared/src/*.js.map
+packages/shared/src/**/*.js
+packages/shared/src/**/*.d.ts
+packages/shared/src/**/*.js.map
