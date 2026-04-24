@@ -18,6 +18,7 @@ const env = {
   WATCH_FOLDER: process.env.WATCH_FOLDER || '/data/incoming',
   PROCESSED_FOLDER: process.env.PROCESSED_FOLDER || '/data/processed',
   OCR_COMMAND: process.env.OCR_COMMAND || '/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"',
+  WATCH_STABLE_MS: Number(process.env.WATCH_STABLE_MS || 8000),
 };
 
 const pool = mariadb.createPool({
@@ -82,6 +83,18 @@ async function findJobBySourcePath(sourcePath: string) {
     return Array.isArray(rows) && rows[0] ? rows[0] : null;
   } finally {
     conn.release();
+  }
+}
+
+async function isFileStable(sourcePath: string) {
+  try {
+    const first = await fs.stat(sourcePath);
+    if (Date.now() - first.mtimeMs < env.WATCH_STABLE_MS) return false;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const second = await fs.stat(sourcePath);
+    return first.size === second.size && first.mtimeMs === second.mtimeMs;
+  } catch {
+    return false;
   }
 }
 
@@ -175,10 +188,11 @@ async function runOcrStep(sourcePath: string, fileName: string) {
   const outputPath = path.join(outputRoot, fileName);
   const command = renderCommand(env.OCR_COMMAND, sourcePath, outputPath);
   const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
+  const details = [stderr?.trim(), stdout?.trim()].filter(Boolean).join(' | ');
   return {
     provider: 'external:ocrmypdf',
     extractedText: `OCR completed for ${fileName}. Output written to ${outputPath}.`,
-    notes: stderr?.trim() || stdout?.trim() || 'External OCR command completed.',
+    notes: details || 'External OCR command completed.',
     outputPath,
   };
 }
@@ -191,6 +205,8 @@ async function scanWatchFolder() {
       const sourcePath = path.join(env.WATCH_FOLDER, entry.name);
       const existing = await findJobBySourcePath(sourcePath);
       if (existing) continue;
+      const stable = await isFileStable(sourcePath);
+      if (!stable) continue;
       const jobId = await createJobForFile(sourcePath, entry.name);
       console.log(`[worker] queued watched-folder job #${jobId} for ${entry.name}`);
     }
@@ -219,7 +235,7 @@ async function processQueuedJobs() {
         ocrProvider: ocr.provider,
         reviewNotes: ocr.notes,
       });
-      await updateJobStatus(job.id, 'completed', 'OCR/classification step complete', { ...inferred, ocrProvider: ocr.provider, outputPath: ocr.outputPath });
+      await updateJobStatus(job.id, 'completed', `OCR/classification step complete: ${ocr.notes}`, { ...inferred, ocrProvider: ocr.provider, outputPath: ocr.outputPath, notes: ocr.notes });
       console.log(`[worker] completed job #${job.id} (${originalFilename})`);
     } catch (error) {
       await markDocumentOcr(job.id, 'failed', 'external:ocrmypdf');
