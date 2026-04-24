@@ -7,7 +7,7 @@
 Default setting:
 
 ```bash
-ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"
+/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"
 ```
 
 This means the runtime environment must provide the command and its dependencies.
@@ -37,7 +37,7 @@ Useful for quick testing if you control the image or can extend it on Unraid.
 ## Expected settings
 
 - `ocr_mode=external`
-- `ocr_command=ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"`
+- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"`
 - `ocr_output_folder=/data/processed/ocr`
 
 ## Validation command examples

@@ -174,7 +174,7 @@ async function runOcrStep(sourcePath: string, fileName: string, settings: Record
   const outputPath = path.join(outputRoot, fileName);
 
   if (ocrMode === 'external') {
-    const template = settings.ocr_command || 'ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"';
+    const template = settings.ocr_command || '/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"';
     const command = renderCommand(template, sourcePath, outputPath);
     const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
     return {

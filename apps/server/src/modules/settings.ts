@@ -14,7 +14,7 @@ const defaultSettings: Record<string, string> = {
   originals_folder: '/data/originals',
   auto_create_jobs: 'true',
   ocr_mode: 'external',
-  ocr_command: 'ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"',
+  ocr_command: '/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"',
   ocr_output_folder: '/data/processed/ocr',
 };
 
