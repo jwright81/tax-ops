@@ -16,6 +16,7 @@ RUN npm run build
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+ENV PATH="/opt/ocrmypdf-venv/bin:${PATH}"
 
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -26,7 +27,9 @@ RUN apt-get update \
     ghostscript \
     pngquant \
     unpaper \
-  && pip3 install --no-cache-dir ocrmypdf \
+  && python3 -m venv /opt/ocrmypdf-venv \
+  && /opt/ocrmypdf-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+  && /opt/ocrmypdf-venv/bin/pip install --no-cache-dir ocrmypdf \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
