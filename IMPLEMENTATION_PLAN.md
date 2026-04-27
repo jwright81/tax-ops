@@ -10,7 +10,8 @@ Tax-ops is a compact, operations-first tax workflow app for scanned intake, OCR,
 - **Auth/admin:** admin-managed users
 - **Deployment shape:** single Docker container
 - **UI direction:** compact Linear-style interface
-- **Repository:** GitHub (`jwright81/tax-ops`)
+- **Repository:** GitHub (`https://github.com/jwright81/tax-ops`)
+- **Container image:** `ghcr.io/jwright81/tax-ops:latest`
 - **Target environment:** local home development + office Unraid deployment
 - **File naming:** include SSN last4 when confidence is high
 - **Execution model:** larger implementation tasks will be planned and delegated through subagents, then reviewed and consolidated
@@ -40,7 +41,8 @@ Stand up the repository, app skeleton, deployment path, and operator/admin found
 - CI basics: lint, typecheck, build
 
 ### Dependencies
-- GitHub repository
+- GitHub repository (`jwright81/tax-ops`)
+- GitHub Actions / GHCR publish path for image updates
 - MariaDB instance available in dev
 - Docker runtime available locally
 

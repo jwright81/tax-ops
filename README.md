@@ -25,6 +25,8 @@ The frontend and backend will ship together in one image for simple deployment a
 ## Key decisions already made
 
 - **Repo name:** `tax-ops`
+- **GitHub repository:** `https://github.com/jwright81/tax-ops`
+- **Container registry image:** `ghcr.io/jwright81/tax-ops:latest`
 - **UI style:** compact, modern, Linear-style
 - **Database:** MariaDB
 - **Auth:** admin-managed users with first-run bootstrap admin
@@ -116,6 +118,13 @@ Expected configuration areas:
 - app secrets such as JWT/session keys
 
 The app should store relative document paths in the database where possible so deployment between home and office environments stays portable.
+
+## Repository + release references
+
+- **Source repository:** `https://github.com/jwright81/tax-ops`
+- **Container image:** `ghcr.io/jwright81/tax-ops:latest`
+- **Unraid template source:** `https://raw.githubusercontent.com/jwright81/tax-ops/main/unraid/tax-ops.xml`
+- **Release/update path:** push changes to `main`, then use the GitHub Actions workflow in `.github/workflows/publish-image.yml` to publish the updated image to GHCR.
 
 ## Deployment targets
 
