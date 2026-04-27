@@ -507,12 +507,12 @@ function App() {
                 </div>
               </Panel>
 
-              <Panel title="OCR runtime readiness" subtitle="What the worker expects when external OCR is enabled">
+              <Panel title="OCR runtime readiness" subtitle="What the worker expects from the bundled OCR stack">
                 <ul className="grid gap-3 text-sm text-slate-300">
                   <li>• <span className="text-slate-100">ocr_mode</span>: {settingsMap.ocr_mode || 'unset'}</li>
                   <li>• <span className="text-slate-100">ocr_command</span>: <code className="text-xs text-slate-200">{settingsMap.ocr_command || 'unset'}</code></li>
                   <li>• <span className="text-slate-100">ocr_output_folder</span>: {settingsMap.ocr_output_folder || 'unset'}</li>
-                  <li>• External OCR mode requires tools like <span className="text-slate-100">ocrmypdf</span>, <span className="text-slate-100">tesseract</span>, and usually <span className="text-slate-100">qpdf</span> in the runtime.</li>
+                  <li>• The container image bundles the OCR tools (<span className="text-slate-100">ocrmypdf</span>, <span className="text-slate-100">tesseract</span>, usually <span className="text-slate-100">qpdf</span>); the OCR command override is an advanced option.</li>
                 </ul>
               </Panel>
             </section>
@@ -566,10 +566,10 @@ function App() {
               </form>
             </Panel>
 
-            <Panel title="System notes" subtitle="Filesystem paths and OCR execution are now container-controlled">
+            <Panel title="System notes" subtitle="Filesystem paths and OCR execution are container-controlled">
               <ul className="grid gap-3 text-sm text-slate-300">
                 <li>• Incoming, processed, review, clients, and originals paths are fixed by container/env configuration.</li>
-                <li>• OCR command is no longer meant to be edited in the GUI.</li>
+                <li>• OCR command override is an advanced setting, not a routine GUI edit.</li>
                 <li>• If a file stalls in processing, check worker logs for the next OCR or file-write step.</li>
                 <li>• Office settings here should stay small and human-meaningful.</li>
               </ul>
@@ -591,7 +591,7 @@ function App() {
             <Panel title="First Unraid test milestone" subtitle="What to validate once you install the container there">
               <ol className="grid gap-3 text-sm text-slate-300 list-decimal pl-5">
                 <li>Set DB host/port/user/password and mounted folders.</li>
-                <li>Confirm OCR tools exist in the runtime image.</li>
+                <li>Confirm the bundled OCR tools are present in the container image.</li>
                 <li>Open the web UI and confirm login works with bootstrap admin.</li>
                 <li>Drop a sample scanned PDF into the watched folder.</li>
                 <li>Verify job appears, worker processes it, and document lands in review.</li>

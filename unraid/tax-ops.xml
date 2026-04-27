@@ -39,6 +39,6 @@
   <Config Name="Port" Target="PORT" Default="3000" Mode="" Description="Application port" Type="Variable" Display="always" Required="true" Mask="false">3000</Config>
   <Config Name="App URL" Target="APP_URL" Default="http://192.168.1.10:3000" Mode="" Description="Base app URL" Type="Variable" Display="always" Required="false" Mask="false">http://192.168.1.10:3000</Config>
 
-  <Config Name="OCR Mode" Target="OCR_MODE" Default="external" Mode="" Description="OCR mode override (optional)" Type="Variable" Display="advanced" Required="false" Mask="false">external</Config>
-  <Config Name="OCR Command" Target="OCR_COMMAND" Default="ocrmypdf --rotate-pages --deskew --force-ocr &quot;{input}&quot; &quot;{output}&quot;" Mode="" Description="OCR command override (optional)" Type="Variable" Display="advanced" Required="false" Mask="false">ocrmypdf --rotate-pages --deskew --force-ocr &quot;{input}&quot; &quot;{output}&quot;</Config>
+  <Config Name="OCR Mode" Target="OCR_MODE" Default="external" Mode="" Description="Advanced OCR mode override; the container image already bundles OCRmyPDF/Tesseract" Type="Variable" Display="advanced" Required="false" Mask="false">external</Config>
+  <Config Name="OCR Command" Target="OCR_COMMAND" Default="ocrmypdf --rotate-pages --deskew --skip-text --sidecar &quot;{sidecar}&quot; &quot;{input}&quot; &quot;{output}&quot;" Mode="" Description="Advanced override for the container's OCR command" Type="Variable" Display="advanced" Required="false" Mask="false">ocrmypdf --rotate-pages --deskew --skip-text --sidecar &quot;{sidecar}&quot; &quot;{input}&quot; &quot;{output}&quot;</Config>
 </Container>

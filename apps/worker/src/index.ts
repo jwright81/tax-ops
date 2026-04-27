@@ -17,7 +17,7 @@ const env = {
   DB_PASSWORD: process.env.DB_PASSWORD || '',
   WATCH_FOLDER: process.env.WATCH_FOLDER || '/data/incoming',
   PROCESSED_FOLDER: process.env.PROCESSED_FOLDER || '/data/processed',
-  OCR_COMMAND: process.env.OCR_COMMAND || '/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"',
+  OCR_COMMAND: process.env.OCR_COMMAND || '/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"',
   WATCH_STABLE_MS: Number(process.env.WATCH_STABLE_MS || 8000),
 };
 
@@ -178,21 +178,26 @@ function inferMetadata(fileName: string) {
   };
 }
 
-function renderCommand(template: string, inputPath: string, outputPath: string) {
-  return template.replaceAll('{input}', inputPath).replaceAll('{output}', outputPath);
+function renderCommand(template: string, inputPath: string, outputPath: string, sidecarPath: string) {
+  return template
+    .replaceAll('{input}', inputPath)
+    .replaceAll('{output}', outputPath)
+    .replaceAll('{sidecar}', sidecarPath);
 }
 
 async function runOcrStep(sourcePath: string, fileName: string) {
   const outputRoot = path.join(env.PROCESSED_FOLDER, 'ocr');
   await fs.mkdir(outputRoot, { recursive: true });
   const outputPath = path.join(outputRoot, fileName);
-  const command = renderCommand(env.OCR_COMMAND, sourcePath, outputPath);
+  const sidecarPath = `${outputPath}.txt`;
+  const command = renderCommand(env.OCR_COMMAND, sourcePath, outputPath, sidecarPath);
   const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
   const details = [stderr?.trim(), stdout?.trim()].filter(Boolean).join(' | ');
+  const extractedText = await fs.readFile(sidecarPath, 'utf8').catch(() => '');
   return {
-    provider: 'external:ocrmypdf',
-    extractedText: `OCR completed for ${fileName}. Output written to ${outputPath}.`,
-    notes: details || 'External OCR command completed.',
+    provider: 'container:ocrmypdf',
+    extractedText: extractedText.trim(),
+    notes: details || `Bundled OCR command completed. Extracted text ${extractedText.trim() ? 'captured' : 'not captured'}.`,
     outputPath,
   };
 }
@@ -221,7 +226,7 @@ async function processQueuedJobs() {
   for (const job of jobs) {
     try {
       await updateJobStatus(job.id, 'processing', 'Worker picked up job');
-      await markDocumentOcr(job.id, 'processing', 'external:ocrmypdf');
+      await markDocumentOcr(job.id, 'processing', 'container:ocrmypdf');
       const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
       const originalFilename = payload.originalFilename || path.basename(job.source_path);
       const inferred = inferMetadata(originalFilename);
@@ -238,7 +243,7 @@ async function processQueuedJobs() {
       await updateJobStatus(job.id, 'completed', `OCR/classification step complete: ${ocr.notes}`, { ...inferred, ocrProvider: ocr.provider, outputPath: ocr.outputPath, notes: ocr.notes });
       console.log(`[worker] completed job #${job.id} (${originalFilename})`);
     } catch (error) {
-      await markDocumentOcr(job.id, 'failed', 'external:ocrmypdf');
+      await markDocumentOcr(job.id, 'failed', 'container:ocrmypdf');
       await updateDocument(job.id, {
         status: 'error',
         formType: 'Error',
@@ -250,7 +255,7 @@ async function processQueuedJobs() {
         extractedText: '',
         currentPath: job.source_path,
         ocrStatus: 'failed',
-        ocrProvider: 'external:ocrmypdf',
+        ocrProvider: 'container:ocrmypdf',
         reviewNotes: `Worker failed: ${String(error)}`,
       });
       await updateJobStatus(job.id, 'failed', `Worker error: ${String(error)}`);

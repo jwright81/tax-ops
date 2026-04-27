@@ -54,7 +54,7 @@ Create these folders before first test if they do not already exist.
 
 ## 3. OCR runtime requirement
 
-If using real OCR mode, the runtime must include:
+If using real OCR mode, the container image must include:
 
 - `ocrmypdf`
 - `tesseract`
@@ -62,14 +62,14 @@ If using real OCR mode, the runtime must include:
 
 ## Current state note
 
-The app is already wired to call an external OCR command, but the current dev host does **not** have these tools installed.
+The app is already wired to call the OCR command inside the container image, but the current dev host does **not** have these tools installed.
 
-That means your first real OCR test should happen on Unraid only **after** the runtime/container includes these packages.
+That means your first real OCR test should happen on Unraid only **after** the container image includes these packages.
 
-If those tools are not yet available in the runtime, either:
+If those tools are not yet available in the image, either:
 
 - expect OCR jobs to fail clearly, or
-- temporarily switch OCR mode away from external for UI-only testing
+- temporarily switch OCR mode away from the bundled OCR path for UI-only testing
 
 ---
 
@@ -120,8 +120,9 @@ Check that these OCR settings are present:
 Recommended first values:
 
 - `ocr_mode=external`
-- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"`
+- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
 - `ocr_output_folder=/data/processed/ocr`
+- Treat `ocr_command` as an advanced override, not a host-side dependency.
 
 ---
 
@@ -146,7 +147,7 @@ Then verify:
 
 ### Success path
 
-If OCR tools are present and runnable:
+If OCR tools are present and runnable in the container image:
 
 - job completes
 - OCR provider is shown
@@ -156,7 +157,7 @@ If OCR tools are present and runnable:
 
 ### Failure path
 
-If OCR tools are missing/misconfigured:
+If OCR tools are missing/misconfigured in the image:
 
 - job fails or document shows OCR error state
 - error context appears in job/document notes

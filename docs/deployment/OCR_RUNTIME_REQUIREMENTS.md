@@ -2,19 +2,19 @@
 
 ## Purpose
 
-`tax-ops` currently supports an external OCR command execution path.
+`tax-ops` ships with OCRmyPDF/Tesseract bundled in the container image, with an OCR command override available for advanced setups.
 
 Default setting:
 
 ```bash
-/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"
+/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"
 ```
 
-This means the runtime environment must provide the command and its dependencies.
+This means the container environment already provides the command and its core dependencies by default.
 
 ## Required binaries
 
-For the default OCR path, install:
+For the bundled OCR path, expect:
 
 - `ocrmypdf`
 - `tesseract`
@@ -24,21 +24,20 @@ Additional dependencies may be required depending on base image/package source.
 
 ## Container note
 
-The current codebase is wired for OCR command execution, but the runtime image has **not yet been upgraded** to bundle OCR packages automatically.
+The current codebase is wired for OCR command execution inside the container image, with an advanced override still available if you need to swap the command.
 
-So there are two paths:
+### Default — bundled OCR stack
+OCRmyPDF/Tesseract are expected to be present in the image.
 
-### Path A — bundle OCR tools into the runtime image
-Recommended for a smoother production deployment.
-
-### Path B — use a runtime/container environment that already has OCR tools available
-Useful for quick testing if you control the image or can extend it on Unraid.
+### Advanced — override the OCR command
+Useful only when you intentionally need a different OCR command inside the container.
 
 ## Expected settings
 
 - `ocr_mode=external`
-- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --force-ocr "{input}" "{output}"`
+- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
 - `ocr_output_folder=/data/processed/ocr`
+- Treat `ocr_command` as an advanced override; the bundled image path should work without host-installed OCR tools.
 
 ## Validation command examples
 

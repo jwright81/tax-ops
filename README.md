@@ -142,7 +142,7 @@ Primary production target. The app should run as a single Docker container with 
 - manual intake job creation UI/API already scaffolded as a stepping stone toward automated watched-folder intake
 - worker now includes watched-folder scan + placeholder OCR/classification loop so intake records can advance to a review state
 - documents now track OCR status/provider, extracted text, and review notes for a more realistic review workflow
-- UI now surfaces OCR readiness guidance and first Unraid-side validation steps for the external OCR runtime path
+- UI now surfaces OCR readiness guidance and first Unraid-side validation steps for the bundled OCR stack
 
 ### Phase 3 — Review + classification
 - review queue
@@ -174,7 +174,7 @@ This repository will maintain living docs for planning and implementation:
 - `PROJECT_STRUCTURE.md` — canonical repo layout and file responsibilities
 - `IMPLEMENTATION_PLAN.md` — phased build plan with progress tracking
 - `docs/deployment/UNRAID_FIRST_RUN.md` — first practical Unraid deployment and validation checklist
-- `docs/deployment/OCR_RUNTIME_REQUIREMENTS.md` — OCR binary/runtime requirements for external OCR mode
+- `docs/deployment/OCR_RUNTIME_REQUIREMENTS.md` — OCR binary/runtime requirements and advanced command override notes for the container-bundled OCR stack
 
 These docs should be updated as decisions change and as project phases are completed.
 
