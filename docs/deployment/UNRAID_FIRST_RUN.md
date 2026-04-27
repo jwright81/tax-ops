@@ -120,7 +120,7 @@ Check that these OCR settings are present:
 Recommended first values:
 
 - `ocr_mode=external`
-- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
+- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
 - `ocr_output_folder=/data/processed/ocr`
 - Treat `ocr_command` as an advanced override, not a host-side dependency.
 

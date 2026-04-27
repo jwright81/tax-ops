@@ -17,7 +17,7 @@ const env = {
   DB_PASSWORD: process.env.DB_PASSWORD || '',
   WATCH_FOLDER: process.env.WATCH_FOLDER || '/data/incoming',
   PROCESSED_FOLDER: process.env.PROCESSED_FOLDER || '/data/processed',
-  OCR_COMMAND: process.env.OCR_COMMAND || '/opt/ocrmypdf-venv/bin/ocrmypdf --rotate-pages --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"',
+  OCR_COMMAND: process.env.OCR_COMMAND || '/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"',
   WATCH_STABLE_MS: Number(process.env.WATCH_STABLE_MS || 8000),
 };
 
@@ -194,6 +194,7 @@ async function runOcrStep(sourcePath: string, fileName: string) {
   const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
   const details = [stderr?.trim(), stdout?.trim()].filter(Boolean).join(' | ');
   const extractedText = await fs.readFile(sidecarPath, 'utf8').catch(() => '');
+  await fs.unlink(sidecarPath).catch(() => undefined);
   return {
     provider: 'container:ocrmypdf',
     extractedText: extractedText.trim(),
