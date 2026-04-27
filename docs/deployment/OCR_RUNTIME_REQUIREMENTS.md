@@ -7,7 +7,7 @@
 Default setting:
 
 ```bash
-/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"
+/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --rotate-pages --jobs 1 --skip-text --sidecar "{sidecar}" "{input}" "{output}"
 ```
 
 This means the container environment already provides the command and its core dependencies by default.
@@ -35,9 +35,13 @@ Useful only when you intentionally need a different OCR command inside the conta
 ## Expected settings
 
 - `ocr_mode=external`
-- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
+- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --rotate-pages --jobs 1 --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
 - `ocr_output_folder=/data/processed/ocr`
 - Treat `ocr_command` as an advanced override; the bundled image path should work without host-installed OCR tools.
+
+## Live-test note
+
+These defaults were intentionally aligned with the known-good `ocrmypdf-auto` behavior after live testing. The worker still reads the sidecar internally for `documents.extracted_text`, then deletes the sidecar file so no `.txt` artifact remains visible to users.
 
 ## Validation command examples
 

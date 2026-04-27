@@ -17,7 +17,7 @@ const env = {
   DB_PASSWORD: process.env.DB_PASSWORD || '',
   WATCH_FOLDER: process.env.WATCH_FOLDER || '/data/incoming',
   PROCESSED_FOLDER: process.env.PROCESSED_FOLDER || '/data/processed',
-  OCR_COMMAND: process.env.OCR_COMMAND || '/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"',
+  OCR_COMMAND: process.env.OCR_COMMAND || '/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --rotate-pages --jobs 1 --skip-text --sidecar "{sidecar}" "{input}" "{output}"',
   WATCH_STABLE_MS: Number(process.env.WATCH_STABLE_MS || 8000),
 };
 

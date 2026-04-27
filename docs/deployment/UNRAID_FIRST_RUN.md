@@ -120,9 +120,11 @@ Check that these OCR settings are present:
 Recommended first values:
 
 - `ocr_mode=external`
-- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
+- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --rotate-pages --jobs 1 --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
 - `ocr_output_folder=/data/processed/ocr`
 - Treat `ocr_command` as an advanced override, not a host-side dependency.
+
+Note: these defaults were intentionally aligned with the known-good `ocrmypdf-auto` behavior after live testing. The worker still captures extracted text from the sidecar internally, then deletes the sidecar so users never see lingering `.txt` files.
 
 ---
 
