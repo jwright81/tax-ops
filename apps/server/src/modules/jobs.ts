@@ -256,11 +256,9 @@ export async function updateDocumentReview(documentId: number, input: { status?:
     const clientName = input.clientName ?? existing.clientName;
     const ssnLast4 = input.ssnLast4 ?? existing.ssnLast4;
 
-    const currentPath = buildDocumentFilename({ taxYear, formType, issuer, clientName, ssnLast4 });
-
     await conn.query(
       `UPDATE documents
-       SET status = ?, tax_year = ?, form_type = ?, issuer = ?, client_name = ?, ssn_last4 = ?, review_notes = ?, current_path = ?
+       SET status = ?, tax_year = ?, form_type = ?, issuer = ?, client_name = ?, ssn_last4 = ?, review_notes = ?
        WHERE id = ?`,
       [
         input.status ?? existing.status,
@@ -270,7 +268,6 @@ export async function updateDocumentReview(documentId: number, input: { status?:
         clientName ?? null,
         ssnLast4 ?? null,
         input.reviewNotes ?? existing.reviewNotes ?? null,
-        currentPath,
         documentId,
       ],
     );

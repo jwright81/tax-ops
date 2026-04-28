@@ -229,15 +229,23 @@ function resolveOcrTextHandling(settings: Record<string, string>, override?: unk
   return 'redo-ocr';
 }
 
-function buildInternalOcrCommand(settings: Record<string, string>, sourcePath: string, outputPath: string, sidecarPath: string, textHandlingOverride?: unknown) {
+function buildInternalOcrCommand(
+  settings: Record<string, string>,
+  sourcePath: string,
+  outputPath: string,
+  sidecarPath: string,
+  textHandlingOverride?: unknown,
+  options?: { includeSidecar?: boolean },
+) {
   const args = [env.OCR_BINARY];
   const textHandling = resolveOcrTextHandling(settings, textHandlingOverride);
+  const includeSidecar = options?.includeSidecar ?? settingEnabled(settings.ocr_sidecar, true);
 
   if (settingEnabled(settings.ocr_deskew, true)) args.push('--deskew');
   if (settingEnabled(settings.ocr_rotate_pages, true)) args.push('--rotate-pages');
   if (settingEnabled(settings.ocr_jobs_enabled, true)) args.push('--jobs', String(normalizePositiveInt(settings.ocr_jobs, 1)));
   args.push(`--${textHandling}`);
-  if (settingEnabled(settings.ocr_sidecar, true)) args.push('--sidecar', sidecarPath);
+  if (includeSidecar) args.push('--sidecar', sidecarPath);
   if (settingEnabled(settings.ocr_rotate_pages_threshold_enabled, false)) {
     const threshold = normalizePositiveNumber(settings.ocr_rotate_pages_threshold);
     if (threshold !== null) args.push('--rotate-pages-threshold', String(threshold));
@@ -247,6 +255,30 @@ function buildInternalOcrCommand(settings: Record<string, string>, sourcePath: s
 
   args.push(sourcePath, outputPath);
   return args.map(shellQuote).join(' ');
+}
+
+async function runInternalOcrPass(
+  settings: Record<string, string>,
+  sourcePath: string,
+  outputPath: string,
+  sidecarPath: string,
+  textHandling: OcrTextHandling,
+  options?: { includeSidecar?: boolean },
+) {
+  const includeSidecar = options?.includeSidecar ?? settingEnabled(settings.ocr_sidecar, true);
+  const command = buildInternalOcrCommand(settings, sourcePath, outputPath, sidecarPath, textHandling, { includeSidecar });
+  const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
+  const details = [stderr?.trim(), stdout?.trim()].filter(Boolean).join(' | ');
+  const extractedText = includeSidecar ? await fs.readFile(sidecarPath, 'utf8').catch(() => '') : '';
+
+  if (includeSidecar) {
+    await fs.unlink(sidecarPath).catch(() => undefined);
+  }
+
+  return {
+    details,
+    extractedText: extractedText.trim(),
+  };
 }
 
 async function runOcrStep(sourcePath: string, fileName: string, settings: Record<string, string>, payload: Record<string, unknown>) {
@@ -268,21 +300,39 @@ async function runOcrStep(sourcePath: string, fileName: string, settings: Record
   await fs.mkdir(outputRoot, { recursive: true });
   const outputPath = path.join(outputRoot, fileName);
   const sidecarPath = `${outputPath}.txt`;
-  const command = buildInternalOcrCommand(settings, sourcePath, outputPath, sidecarPath, textHandling);
-  const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
-  const details = [stderr?.trim(), stdout?.trim()].filter(Boolean).join(' | ');
-  const extractedText = settingEnabled(settings.ocr_sidecar, true)
-    ? await fs.readFile(sidecarPath, 'utf8').catch(() => '')
-    : '';
+  const sidecarEnabled = settingEnabled(settings.ocr_sidecar, true);
 
-  if (settingEnabled(settings.ocr_sidecar, true)) {
-    await fs.unlink(sidecarPath).catch(() => undefined);
+  let details = '';
+  let extractedText = '';
+
+  if (textHandling === 'force-ocr') {
+    const stagingRoot = path.join(outputRoot, '.staging');
+    await fs.mkdir(stagingRoot, { recursive: true });
+    const normalizedPath = path.join(stagingRoot, `${path.parse(fileName).name}.${Date.now()}.normalized.pdf`);
+    const normalizedSidecarPath = `${normalizedPath}.txt`;
+
+    try {
+      const normalized = await runInternalOcrPass(settings, sourcePath, normalizedPath, normalizedSidecarPath, 'skip-text', { includeSidecar: false });
+      const forced = await runInternalOcrPass(settings, normalizedPath, outputPath, sidecarPath, 'force-ocr', { includeSidecar: sidecarEnabled });
+      extractedText = forced.extractedText;
+      details = [
+        normalized.details ? `Normalization (--skip-text): ${normalized.details}` : 'Normalization (--skip-text) completed.',
+        forced.details || `Bundled OCR command completed with --force-ocr. Extracted text ${forced.extractedText ? 'captured' : 'not captured'}.`,
+      ].join(' | ');
+    } finally {
+      await fs.unlink(normalizedPath).catch(() => undefined);
+      await fs.unlink(normalizedSidecarPath).catch(() => undefined);
+    }
+  } else {
+    const result = await runInternalOcrPass(settings, sourcePath, outputPath, sidecarPath, textHandling, { includeSidecar: sidecarEnabled });
+    extractedText = result.extractedText;
+    details = result.details || `Bundled OCR command completed with --${textHandling}. Extracted text ${result.extractedText ? 'captured' : 'not captured'}.`;
   }
 
   return {
     provider: `container:ocrmypdf:${textHandling}`,
-    extractedText: extractedText.trim(),
-    notes: details || `Bundled OCR command completed with --${textHandling}. Extracted text ${extractedText.trim() ? 'captured' : 'not captured'}.`,
+    extractedText,
+    notes: details,
     outputPath,
     ocrStatus: 'completed' as const,
     documentStatus: 'review' as const,
