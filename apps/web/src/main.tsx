@@ -58,6 +58,8 @@ interface DocumentItem {
   updatedAt: string;
 }
 
+type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
+
 const tokenKey = 'tax-ops.token';
 const officeSettingKeys = ['office_name', 'auto_create_jobs'] as const;
 const ocrDefaultSettings: Record<string, string> = {
@@ -66,7 +68,7 @@ const ocrDefaultSettings: Record<string, string> = {
   ocr_rotate_pages: 'true',
   ocr_jobs_enabled: 'true',
   ocr_jobs: '1',
-  ocr_skip_text: 'true',
+  ocr_text_handling: 'skip-text',
   ocr_sidecar: 'true',
   ocr_rotate_pages_threshold_enabled: 'false',
   ocr_rotate_pages_threshold: '14.0',
@@ -90,13 +92,24 @@ function shellPreview(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+function isOcrTextHandling(value: string | undefined): value is OcrTextHandling {
+  return value === 'skip-text' || value === 'redo-ocr' || value === 'force-ocr';
+}
+
+function resolveOcrTextHandling(settingDrafts: Record<string, string>): OcrTextHandling {
+  if (isOcrTextHandling(settingDrafts.ocr_text_handling)) return settingDrafts.ocr_text_handling;
+  if (isEnabled(settingDrafts.ocr_skip_text, true)) return 'skip-text';
+  return 'redo-ocr';
+}
+
 function buildOcrCommandPreview(settingDrafts: Record<string, string>) {
   const args = ['/opt/ocrmypdf-venv/bin/ocrmypdf'];
+  const textHandling = resolveOcrTextHandling(settingDrafts);
 
   if (isEnabled(settingDrafts.ocr_deskew, true)) args.push('--deskew');
   if (isEnabled(settingDrafts.ocr_rotate_pages, true)) args.push('--rotate-pages');
   if (isEnabled(settingDrafts.ocr_jobs_enabled, true)) args.push('--jobs', settingDrafts.ocr_jobs || '1');
-  if (isEnabled(settingDrafts.ocr_skip_text, true)) args.push('--skip-text');
+  args.push(`--${textHandling}`);
   if (isEnabled(settingDrafts.ocr_sidecar, true)) args.push('--sidecar', '{sidecar}');
   if (isEnabled(settingDrafts.ocr_rotate_pages_threshold_enabled, false) && settingDrafts.ocr_rotate_pages_threshold?.trim()) {
     args.push('--rotate-pages-threshold', settingDrafts.ocr_rotate_pages_threshold.trim());
@@ -285,6 +298,7 @@ function App() {
   const [selectedDocument, setSelectedDocument] = useState<DocumentItem | null>(null);
   const [documentStatusFilter, setDocumentStatusFilter] = useState<'all' | 'intake' | 'review' | 'filed' | 'error'>('review');
   const [reviewDraft, setReviewDraft] = useState({ status: 'review', taxYear: '', formType: '', issuer: '', clientName: '', ssnLast4: '', reviewNotes: '' });
+  const [rerunBusyMode, setRerunBusyMode] = useState<Exclude<OcrTextHandling, 'skip-text'> | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const isAdmin = me?.role === 'admin';
@@ -296,6 +310,7 @@ function App() {
   const jobsEnabled = isEnabled(settingDrafts.ocr_jobs_enabled, true);
   const rotateThresholdEnabled = isEnabled(settingDrafts.ocr_rotate_pages_threshold_enabled, false);
   const sidecarEnabled = isEnabled(settingDrafts.ocr_sidecar, true);
+  const ocrTextHandling = resolveOcrTextHandling(settingDrafts);
   const ocrCommandPreview = buildOcrCommandPreview(settingDrafts);
 
   async function loadData(activeToken = token) {
@@ -488,6 +503,25 @@ function App() {
     }
   }
 
+  async function rerunSelectedDocument(mode: Exclude<OcrTextHandling, 'skip-text'>) {
+    if (!token || !selectedDocumentId) return;
+    setError(null);
+    setRerunBusyMode(mode);
+    try {
+      await api<{ document: DocumentItem }>(`/api/documents/${selectedDocumentId}/rerun-ocr`, {
+        method: 'POST',
+        body: JSON.stringify({ ocrTextHandling: mode }),
+      }, token);
+      setSuccessMessage(`Queued OCR re-run with --${mode}.`);
+      await loadData(token);
+      await loadDocument(selectedDocumentId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to queue OCR re-run');
+    } finally {
+      setRerunBusyMode(null);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-bg px-6 py-8 text-text">
       <div className="mx-auto grid max-w-7xl gap-6">
@@ -657,7 +691,15 @@ function App() {
                     <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_rotate_pages, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages: String(event.target.checked) }))} />--rotate-pages</label>
                     <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={jobsEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_jobs_enabled: String(event.target.checked) }))} />--jobs</label>
                     {jobsEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Jobs value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="numeric" value={settingDrafts.ocr_jobs ?? '1'} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_jobs: event.target.value }))} /></label> : <div />}
-                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_skip_text, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_skip_text: String(event.target.checked) }))} />--skip-text</label>
+                    <label className="grid gap-2 text-sm md:col-span-2">
+                      <span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Existing text handling</span>
+                      <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} value={ocrTextHandling} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_text_handling: event.target.value }))}>
+                        <option value="skip-text">skip-text — preserve existing text layer</option>
+                        <option value="redo-ocr">redo-ocr — replace bad text layer while keeping page content</option>
+                        <option value="force-ocr">force-ocr — rasterize then OCR everything</option>
+                      </select>
+                      <span className="text-xs text-slate-500">skip-text preserves an existing text layer. redo-ocr or force-ocr can help when searchable highlights are misaligned.</span>
+                    </label>
                     <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={sidecarEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_sidecar: String(event.target.checked) }))} />--sidecar</label>
                     <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={rotateThresholdEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages_threshold_enabled: String(event.target.checked) }))} />--rotate-pages-threshold</label>
                     {rotateThresholdEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Threshold value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="decimal" value={settingDrafts.ocr_rotate_pages_threshold ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages_threshold: event.target.value }))} /></label> : <div />}
@@ -757,6 +799,15 @@ function App() {
                     <div><span className="text-slate-500">Original:</span> {selectedDocument.originalFilename}</div>
                     <div><span className="text-slate-500">Current:</span> {selectedDocument.currentPath}</div>
                     <div><span className="text-slate-500">OCR:</span> {selectedDocument.ocrStatus} via {selectedDocument.ocrProvider || 'n/a'}</div>
+                  </div>
+
+                  <div className="rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-sm text-slate-300">
+                    <div className="font-medium text-text">OCR retry tools</div>
+                    <div className="mt-1 text-xs text-slate-500">If highlights land in the wrong place, try redo-ocr first. force-ocr is the more aggressive fallback.</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button className="rounded-xl border border-line px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/5 disabled:opacity-50" disabled={!isAdmin || rerunBusyMode !== null} onClick={() => { void rerunSelectedDocument('redo-ocr'); }} type="button">{rerunBusyMode === 'redo-ocr' ? 'Queueing redo…' : 'Re-run OCR (redo)'}</button>
+                      <button className="rounded-xl border border-line px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/5 disabled:opacity-50" disabled={!isAdmin || rerunBusyMode !== null} onClick={() => { void rerunSelectedDocument('force-ocr'); }} type="button">{rerunBusyMode === 'force-ocr' ? 'Queueing force…' : 'Re-run OCR (force)'}</button>
+                    </div>
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">

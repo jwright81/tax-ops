@@ -1,5 +1,8 @@
+import path from 'node:path';
 import { buildDocumentFilename } from '../../../../packages/shared/src/naming/document.js';
 import { pool } from '../db/pool.js';
+
+type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
 
 function mapDocument(row: any) {
   return {
@@ -270,6 +273,50 @@ export async function updateDocumentReview(documentId: number, input: { status?:
         currentPath,
         documentId,
       ],
+    );
+
+    return getDocumentById(documentId);
+  } finally {
+    conn.release();
+  }
+}
+
+export async function queueDocumentOcrRerun(documentId: number, input: { ocrTextHandling: Exclude<OcrTextHandling, 'skip-text'> }) {
+  const conn = await pool.getConnection();
+  try {
+    const rows = await conn.query(
+      `SELECT id, job_id, original_filename, original_path, current_path, tax_year, form_type, issuer, client_name, ssn_last4, status, confidence_score, extracted_text, ocr_status, ocr_provider, review_notes, created_at, updated_at
+       FROM documents WHERE id = ? LIMIT 1`,
+      [documentId],
+    );
+    const existing = Array.isArray(rows) && rows[0] ? mapDocument(rows[0]) : null;
+    if (!existing) return null;
+
+    const rerunNote = `OCR re-run queued with --${input.ocrTextHandling} on ${new Date().toISOString()}.`;
+    const reviewNotes = [existing.reviewNotes?.trim(), rerunNote].filter(Boolean).join('\n\n');
+    const sourcePath = existing.currentPath && path.isAbsolute(existing.currentPath) ? existing.currentPath : existing.originalPath;
+
+    const result = await conn.query(
+      `INSERT INTO processing_jobs (job_type, status, source_path, message, payload_json)
+       VALUES ('document.ocr_rerun', 'queued', ?, ?, ?)`,
+      [
+        sourcePath,
+        `Queued OCR re-run (${input.ocrTextHandling})`,
+        JSON.stringify({
+          originalFilename: existing.originalFilename,
+          rerunForDocumentId: existing.id,
+          previousJobId: existing.jobId,
+          ocrTextHandlingOverride: input.ocrTextHandling,
+        }),
+      ],
+    );
+
+    const jobId = Number(result.insertId);
+    await conn.query(
+      `UPDATE documents
+       SET job_id = ?, status = 'review', ocr_status = 'pending', ocr_provider = ?, review_notes = ?, current_path = ?
+       WHERE id = ?`,
+      [jobId, `queued:${input.ocrTextHandling}`, reviewNotes, sourcePath, documentId],
     );
 
     return getDocumentById(documentId);

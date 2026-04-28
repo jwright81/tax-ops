@@ -27,13 +27,15 @@ const defaultSettings = {
   ocr_rotate_pages: 'true',
   ocr_jobs_enabled: 'true',
   ocr_jobs: '1',
-  ocr_skip_text: 'true',
+  ocr_text_handling: 'skip-text',
   ocr_sidecar: 'true',
   ocr_rotate_pages_threshold_enabled: 'false',
   ocr_rotate_pages_threshold: '14.0',
   ocr_clean: 'false',
   ocr_clean_final: 'false',
 } as const;
+
+type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
 
 const pool = mariadb.createPool({
   host: env.DB_HOST,
@@ -216,13 +218,25 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function buildInternalOcrCommand(settings: Record<string, string>, sourcePath: string, outputPath: string, sidecarPath: string) {
+function isOcrTextHandling(value: unknown): value is OcrTextHandling {
+  return value === 'skip-text' || value === 'redo-ocr' || value === 'force-ocr';
+}
+
+function resolveOcrTextHandling(settings: Record<string, string>, override?: unknown): OcrTextHandling {
+  if (isOcrTextHandling(override)) return override;
+  if (isOcrTextHandling(settings.ocr_text_handling)) return settings.ocr_text_handling;
+  if (settingEnabled(settings.ocr_skip_text, true)) return 'skip-text';
+  return 'redo-ocr';
+}
+
+function buildInternalOcrCommand(settings: Record<string, string>, sourcePath: string, outputPath: string, sidecarPath: string, textHandlingOverride?: unknown) {
   const args = [env.OCR_BINARY];
+  const textHandling = resolveOcrTextHandling(settings, textHandlingOverride);
 
   if (settingEnabled(settings.ocr_deskew, true)) args.push('--deskew');
   if (settingEnabled(settings.ocr_rotate_pages, true)) args.push('--rotate-pages');
   if (settingEnabled(settings.ocr_jobs_enabled, true)) args.push('--jobs', String(normalizePositiveInt(settings.ocr_jobs, 1)));
-  if (settingEnabled(settings.ocr_skip_text, true)) args.push('--skip-text');
+  args.push(`--${textHandling}`);
   if (settingEnabled(settings.ocr_sidecar, true)) args.push('--sidecar', sidecarPath);
   if (settingEnabled(settings.ocr_rotate_pages_threshold_enabled, false)) {
     const threshold = normalizePositiveNumber(settings.ocr_rotate_pages_threshold);
@@ -235,8 +249,9 @@ function buildInternalOcrCommand(settings: Record<string, string>, sourcePath: s
   return args.map(shellQuote).join(' ');
 }
 
-async function runOcrStep(sourcePath: string, fileName: string, settings: Record<string, string>) {
+async function runOcrStep(sourcePath: string, fileName: string, settings: Record<string, string>, payload: Record<string, unknown>) {
   const ocrMode = settings.ocr_mode === 'external' ? 'external' : 'internal';
+  const textHandling = resolveOcrTextHandling(settings, payload.ocrTextHandlingOverride);
 
   if (ocrMode === 'external') {
     return {
@@ -253,7 +268,7 @@ async function runOcrStep(sourcePath: string, fileName: string, settings: Record
   await fs.mkdir(outputRoot, { recursive: true });
   const outputPath = path.join(outputRoot, fileName);
   const sidecarPath = `${outputPath}.txt`;
-  const command = buildInternalOcrCommand(settings, sourcePath, outputPath, sidecarPath);
+  const command = buildInternalOcrCommand(settings, sourcePath, outputPath, sidecarPath, textHandling);
   const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
   const details = [stderr?.trim(), stdout?.trim()].filter(Boolean).join(' | ');
   const extractedText = settingEnabled(settings.ocr_sidecar, true)
@@ -265,9 +280,9 @@ async function runOcrStep(sourcePath: string, fileName: string, settings: Record
   }
 
   return {
-    provider: 'container:ocrmypdf',
+    provider: `container:ocrmypdf:${textHandling}`,
     extractedText: extractedText.trim(),
-    notes: details || `Bundled OCR command completed. Extracted text ${extractedText.trim() ? 'captured' : 'not captured'}.`,
+    notes: details || `Bundled OCR command completed with --${textHandling}. Extracted text ${extractedText.trim() ? 'captured' : 'not captured'}.`,
     outputPath,
     ocrStatus: 'completed' as const,
     documentStatus: 'review' as const,
@@ -297,13 +312,14 @@ async function processQueuedJobs() {
   for (const job of jobs) {
     try {
       const settings = await getSettingsMap();
+      const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
+      const textHandling = resolveOcrTextHandling(settings, payload.ocrTextHandlingOverride);
       const provider = settings.ocr_mode === 'external' ? 'external:pending' : 'container:ocrmypdf';
       await updateJobStatus(job.id, 'processing', 'Worker picked up job');
-      await markDocumentOcr(job.id, 'processing', provider);
-      const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
+      await markDocumentOcr(job.id, 'processing', settings.ocr_mode === 'external' ? provider : `${provider}:${textHandling}`);
       const originalFilename = payload.originalFilename || path.basename(job.source_path);
       const inferred = inferMetadata(originalFilename);
-      const ocr = await runOcrStep(job.source_path, originalFilename, settings);
+      const ocr = await runOcrStep(job.source_path, originalFilename, settings, payload);
       await updateDocument(job.id, {
         status: ocr.documentStatus,
         ...inferred,
@@ -316,7 +332,10 @@ async function processQueuedJobs() {
       await updateJobStatus(job.id, 'completed', `OCR/classification step complete: ${ocr.notes}`, { ...inferred, ocrProvider: ocr.provider, outputPath: ocr.outputPath, notes: ocr.notes, ocrStatus: ocr.ocrStatus });
       console.log(`[worker] completed job #${job.id} (${originalFilename})`);
     } catch (error) {
-      await markDocumentOcr(job.id, 'failed', 'container:ocrmypdf');
+      const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
+      const settings = await getSettingsMap();
+      const textHandling = resolveOcrTextHandling(settings, payload.ocrTextHandlingOverride);
+      await markDocumentOcr(job.id, 'failed', `container:ocrmypdf:${textHandling}`);
       await updateDocument(job.id, {
         status: 'error',
         formType: 'Error',
@@ -328,8 +347,8 @@ async function processQueuedJobs() {
         extractedText: '',
         currentPath: job.source_path,
         ocrStatus: 'failed',
-        ocrProvider: 'container:ocrmypdf',
-        reviewNotes: `Worker failed: ${String(error)}`,
+        ocrProvider: `container:ocrmypdf:${textHandling}`,
+        reviewNotes: `Worker failed during --${textHandling}: ${String(error)}`,
       });
       await updateJobStatus(job.id, 'failed', `Worker error: ${String(error)}`);
       console.error(`[worker] failed job #${job.id}`, error);

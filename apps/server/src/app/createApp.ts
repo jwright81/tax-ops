@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import { authenticate } from '../auth/login.js';
 import { type AuthenticatedRequest, requireAdmin, requireAuth } from '../auth/requireAuth.js';
 import { pool } from '../db/pool.js';
-import { createDocument, createJob, getDocumentById, listDocuments, listJobs, updateDocumentReview } from '../modules/jobs.js';
+import { createDocument, createJob, getDocumentById, listDocuments, listJobs, queueDocumentOcrRerun, updateDocumentReview } from '../modules/jobs.js';
 import { listSettings, upsertSettings } from '../modules/settings.js';
 import { createUser, getUserById, listUsers, recordAudit, resetUserPassword, updateUser } from '../modules/users.js';
 
@@ -58,6 +58,10 @@ const updateDocumentReviewSchema = z.object({
   clientName: z.string().max(255).optional().nullable(),
   ssnLast4: z.string().max(4).optional().nullable(),
   reviewNotes: z.string().max(5000).optional().nullable(),
+});
+
+const rerunDocumentOcrSchema = z.object({
+  ocrTextHandling: z.enum(['redo-ocr', 'force-ocr']),
 });
 
 export function createApp() {
@@ -269,6 +273,29 @@ export function createApp() {
     const document = await updateDocumentReview(documentId, parsed.data);
     await recordAudit(req.auth!.userId, 'document.review_update', 'document', String(documentId), parsed.data);
     res.json({ document });
+  });
+
+  app.post('/api/documents/:id/rerun-ocr', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {
+    const documentId = Number(req.params.id);
+    if (!Number.isFinite(documentId)) {
+      res.status(400).json({ error: 'invalid document id' });
+      return;
+    }
+
+    const parsed = rerunDocumentOcrSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+
+    const document = await queueDocumentOcrRerun(documentId, parsed.data);
+    if (!document) {
+      res.status(404).json({ error: 'document not found' });
+      return;
+    }
+
+    await recordAudit(req.auth!.userId, 'document.ocr_rerun', 'document', String(documentId), parsed.data);
+    res.status(202).json({ document });
   });
 
   app.post('/api/intake/jobs', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {
