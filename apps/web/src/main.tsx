@@ -61,6 +61,7 @@ interface DocumentItem {
 type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
 
 const tokenKey = 'tax-ops.token';
+const autoRefreshIntervalMs = 5000;
 const officeSettingKeys = ['office_name', 'auto_create_jobs'] as const;
 const ocrDefaultSettings: Record<string, string> = {
   ocr_mode: 'internal',
@@ -293,11 +294,13 @@ function App() {
   const [createForm, setCreateForm] = useState({ username: '', password: '', role: 'staff' as UserRole, active: true });
   const [resetMap, setResetMap] = useState<Record<number, string>>({});
   const [settingDrafts, setSettingDrafts] = useState<Record<string, string>>({});
+  const [settingsDirty, setSettingsDirty] = useState(false);
   const [intakeForm, setIntakeForm] = useState({ sourcePath: '/data/incoming/sample-scan.pdf', originalFilename: 'sample-scan.pdf', extractedText: '' });
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<DocumentItem | null>(null);
   const [documentStatusFilter, setDocumentStatusFilter] = useState<'all' | 'intake' | 'review' | 'filed' | 'error'>('review');
   const [reviewDraft, setReviewDraft] = useState({ status: 'review', taxYear: '', formType: '', issuer: '', clientName: '', ssnLast4: '', reviewNotes: '' });
+  const [reviewDirty, setReviewDirty] = useState(false);
   const [rerunBusyMode, setRerunBusyMode] = useState<Exclude<OcrTextHandling, 'skip-text'> | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -313,10 +316,30 @@ function App() {
   const ocrTextHandling = resolveOcrTextHandling(settingDrafts);
   const ocrCommandPreview = buildOcrCommandPreview(settingDrafts);
 
-  async function loadData(activeToken = token) {
+  function setSettingDraftValue(key: string, value: string) {
+    setSettingsDirty(true);
+    setSettingDrafts((current) => ({ ...current, [key]: value }));
+  }
+
+  function applyReviewDraft(document: DocumentItem) {
+    setReviewDraft({
+      status: document.status,
+      taxYear: document.taxYear ?? '',
+      formType: document.formType ?? '',
+      issuer: document.issuer ?? '',
+      clientName: document.clientName ?? '',
+      ssnLast4: document.ssnLast4 ?? '',
+      reviewNotes: document.reviewNotes ?? '',
+    });
+    setReviewDirty(false);
+  }
+
+  async function loadData(activeToken = token, options: { background?: boolean; preserveSettingDrafts?: boolean } = {}) {
     if (!activeToken) return;
-    setLoading(true);
-    setError(null);
+    if (!options.background) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const meResult = await api<{ user: User }>('/api/me', {}, activeToken);
       const nextMe = meResult.user;
@@ -337,10 +360,15 @@ function App() {
         ]);
         setUsers(usersResult.users);
         setSettings(settingsResult.settings);
-        setSettingDrafts(withSettingDefaults(settingsResult.settings));
+        if (!options.preserveSettingDrafts) {
+          setSettingDrafts(withSettingDefaults(settingsResult.settings));
+          setSettingsDirty(false);
+        }
       } else {
         setUsers([]);
         setSettings([]);
+        setSettingDrafts(withSettingDefaults([]));
+        setSettingsDirty(false);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load app data';
@@ -351,7 +379,9 @@ function App() {
         setToken(null);
       }
     } finally {
-      setLoading(false);
+      if (!options.background) {
+        setLoading(false);
+      }
     }
   }
 
@@ -361,21 +391,17 @@ function App() {
     }
   }, [token]);
 
-  async function loadDocument(documentId: number) {
+  async function loadDocument(documentId: number, options: { background?: boolean; preserveReviewDraft?: boolean } = {}) {
     if (!token) return;
     try {
       const response = await api<{ document: DocumentItem }>(`/api/documents/${documentId}`, {}, token);
       setSelectedDocument(response.document);
-      setSuccessMessage(null);
-      setReviewDraft({
-        status: response.document.status,
-        taxYear: response.document.taxYear ?? '',
-        formType: response.document.formType ?? '',
-        issuer: response.document.issuer ?? '',
-        clientName: response.document.clientName ?? '',
-        ssnLast4: response.document.ssnLast4 ?? '',
-        reviewNotes: response.document.reviewNotes ?? '',
-      });
+      if (!options.background) {
+        setSuccessMessage(null);
+      }
+      if (!options.preserveReviewDraft) {
+        applyReviewDraft(response.document);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load document');
     }
@@ -386,8 +412,29 @@ function App() {
       void loadDocument(selectedDocumentId);
     } else {
       setSelectedDocument(null);
+      setReviewDirty(false);
     }
   }, [selectedDocumentId]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const interval = window.setInterval(() => {
+      void loadData(token, {
+        background: true,
+        preserveSettingDrafts: activeTab === 'settings' && settingsDirty,
+      });
+
+      if (selectedDocumentId) {
+        void loadDocument(selectedDocumentId, {
+          background: true,
+          preserveReviewDraft: activeTab === 'review' && reviewDirty,
+        });
+      }
+    }, autoRefreshIntervalMs);
+
+    return () => window.clearInterval(interval);
+  }, [token, activeTab, settingsDirty, selectedDocumentId, reviewDirty]);
 
   const stats = useMemo(
     () => ({
@@ -469,6 +516,7 @@ function App() {
       const response = await api<{ settings: Setting[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ settings: payload }) }, token);
       setSettings(response.settings);
       setSettingDrafts(withSettingDefaults(response.settings));
+      setSettingsDirty(false);
       setSuccessMessage('Settings saved.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save settings');
@@ -514,7 +562,7 @@ function App() {
       }, token);
       setSuccessMessage(`Queued OCR re-run with --${mode}.`);
       await loadData(token);
-      await loadDocument(selectedDocumentId);
+      await loadDocument(selectedDocumentId, { preserveReviewDraft: reviewDirty });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to queue OCR re-run');
     } finally {
@@ -539,6 +587,8 @@ function App() {
               setMe(null);
               setUsers([]);
               setSettings([]);
+              setSettingsDirty(false);
+              setReviewDirty(false);
             }}>
               Log out
             </button>
@@ -659,12 +709,12 @@ function App() {
                       <label className="grid gap-2 text-sm" key={setting.key}>
                         <span className="text-slate-300">{setting.key}</span>
                         {setting.key === 'auto_create_jobs' ? (
-                          <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, [setting.key]: event.target.value }))}>
+                          <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDraftValue(setting.key, event.target.value)}>
                             <option value="true">true</option>
                             <option value="false">false</option>
                           </select>
                         ) : (
-                          <input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, [setting.key]: event.target.value }))} />
+                          <input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDraftValue(setting.key, event.target.value)} />
                         )}
                       </label>
                     ))}
@@ -680,31 +730,31 @@ function App() {
                   <div className="mt-5 grid gap-4 md:grid-cols-2">
                     <label className="grid gap-2 text-sm md:col-span-2">
                       <span className="text-slate-300">OCR Mode</span>
-                      <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={ocrMode} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_mode: event.target.value }))}>
+                      <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={ocrMode} onChange={(event) => setSettingDraftValue('ocr_mode', event.target.value)}>
                         <option value="internal">internal</option>
                         <option value="external">external</option>
                       </select>
                       <span className="text-xs text-slate-500">Internal runs OCRmyPDF in the worker. External mode is saved now, but automatic handoff/import is not fully wired yet.</span>
                     </label>
 
-                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_deskew, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_deskew: String(event.target.checked) }))} />--deskew</label>
-                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_rotate_pages, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages: String(event.target.checked) }))} />--rotate-pages</label>
-                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={jobsEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_jobs_enabled: String(event.target.checked) }))} />--jobs</label>
-                    {jobsEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Jobs value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="numeric" value={settingDrafts.ocr_jobs ?? '1'} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_jobs: event.target.value }))} /></label> : <div />}
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_deskew, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_deskew', String(event.target.checked))} />--deskew</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_rotate_pages, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_rotate_pages', String(event.target.checked))} />--rotate-pages</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={jobsEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_jobs_enabled', String(event.target.checked))} />--jobs</label>
+                    {jobsEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Jobs value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="numeric" value={settingDrafts.ocr_jobs ?? '1'} onChange={(event) => setSettingDraftValue('ocr_jobs', event.target.value)} /></label> : <div />}
                     <label className="grid gap-2 text-sm md:col-span-2">
                       <span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Existing text handling</span>
-                      <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} value={ocrTextHandling} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_text_handling: event.target.value }))}>
+                      <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} value={ocrTextHandling} onChange={(event) => setSettingDraftValue('ocr_text_handling', event.target.value)}>
                         <option value="skip-text">skip-text — preserve existing text layer</option>
                         <option value="redo-ocr">redo-ocr — replace bad text layer while keeping page content</option>
                         <option value="force-ocr">force-ocr — rasterize then OCR everything</option>
                       </select>
                       <span className="text-xs text-slate-500">skip-text preserves an existing text layer. redo-ocr or force-ocr can help when searchable highlights are misaligned.</span>
                     </label>
-                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={sidecarEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_sidecar: String(event.target.checked) }))} />--sidecar</label>
-                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={rotateThresholdEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages_threshold_enabled: String(event.target.checked) }))} />--rotate-pages-threshold</label>
-                    {rotateThresholdEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Threshold value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="decimal" value={settingDrafts.ocr_rotate_pages_threshold ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages_threshold: event.target.value }))} /></label> : <div />}
-                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_clean: String(event.target.checked) }))} />--clean</label>
-                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean_final, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_clean_final: String(event.target.checked) }))} />--clean-final</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={sidecarEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_sidecar', String(event.target.checked))} />--sidecar</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={rotateThresholdEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_rotate_pages_threshold_enabled', String(event.target.checked))} />--rotate-pages-threshold</label>
+                    {rotateThresholdEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Threshold value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="decimal" value={settingDrafts.ocr_rotate_pages_threshold ?? ''} onChange={(event) => setSettingDraftValue('ocr_rotate_pages_threshold', event.target.value)} /></label> : <div />}
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_clean', String(event.target.checked))} />--clean</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean_final, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_clean_final', String(event.target.checked))} />--clean-final</label>
                   </div>
 
                   {ocrMode === 'external' ? <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">OCRmyPDF options are disabled while OCR Mode is set to external.</div> : null}
@@ -811,15 +861,15 @@ function App() {
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Status</span><select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.status} onChange={(event) => setReviewDraft((current) => ({ ...current, status: event.target.value }))}><option value="review">review</option><option value="filed">filed</option><option value="intake">intake</option><option value="error">error</option></select></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Tax year</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.taxYear} onChange={(event) => setReviewDraft((current) => ({ ...current, taxYear: event.target.value }))} /></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Form type</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.formType} onChange={(event) => setReviewDraft((current) => ({ ...current, formType: event.target.value }))} /></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Issuer</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.issuer} onChange={(event) => setReviewDraft((current) => ({ ...current, issuer: event.target.value }))} /></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Client name</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.clientName} onChange={(event) => setReviewDraft((current) => ({ ...current, clientName: event.target.value }))} /></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">SSN last4</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.ssnLast4} onChange={(event) => setReviewDraft((current) => ({ ...current, ssnLast4: event.target.value }))} /></label>
+                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Status</span><select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.status} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, status: event.target.value })); }}><option value="review">review</option><option value="filed">filed</option><option value="intake">intake</option><option value="error">error</option></select></label>
+                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Tax year</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.taxYear} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, taxYear: event.target.value })); }} /></label>
+                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Form type</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.formType} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, formType: event.target.value })); }} /></label>
+                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Issuer</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.issuer} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, issuer: event.target.value })); }} /></label>
+                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Client name</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.clientName} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, clientName: event.target.value })); }} /></label>
+                    <label className="grid gap-2 text-sm"><span className="text-slate-300">SSN last4</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.ssnLast4} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, ssnLast4: event.target.value })); }} /></label>
                   </div>
 
-                  <label className="grid gap-2 text-sm"><span className="text-slate-300">Review notes</span><textarea className="min-h-32 rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.reviewNotes} onChange={(event) => setReviewDraft((current) => ({ ...current, reviewNotes: event.target.value }))} /></label>
+                  <label className="grid gap-2 text-sm"><span className="text-slate-300">Review notes</span><textarea className="min-h-32 rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.reviewNotes} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, reviewNotes: event.target.value })); }} /></label>
 
                   <Panel title="Extracted text" subtitle="OCR output or failure context">
                     <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-xs text-slate-300">{selectedDocument.extractedText || 'No extracted text available yet.'}</pre>

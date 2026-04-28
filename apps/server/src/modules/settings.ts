@@ -13,7 +13,7 @@ const editableDefaultSettings: Record<string, string> = {
   ocr_rotate_pages: 'true',
   ocr_jobs_enabled: 'true',
   ocr_jobs: '1',
-  ocr_skip_text: 'true',
+  ocr_text_handling: 'skip-text',
   ocr_sidecar: 'true',
   ocr_rotate_pages_threshold_enabled: 'false',
   ocr_rotate_pages_threshold: '14.0',
@@ -29,7 +29,7 @@ const editableSettingKeys = [
   'ocr_rotate_pages',
   'ocr_jobs_enabled',
   'ocr_jobs',
-  'ocr_skip_text',
+  'ocr_text_handling',
   'ocr_sidecar',
   'ocr_rotate_pages_threshold_enabled',
   'ocr_rotate_pages_threshold',
@@ -59,11 +59,17 @@ export async function listSettings() {
   const conn = await pool.getConnection();
   try {
     const rows = await conn.query('SELECT setting_key, setting_value FROM system_settings');
+    const entries = Array.isArray(rows) ? rows : [];
     const map = new Map(
-      (Array.isArray(rows) ? rows : [])
+      entries
         .filter((row) => editableSettingKeySet.has(row.setting_key))
         .map((row) => [row.setting_key, row.setting_value]),
     );
+
+    if (!map.has('ocr_text_handling')) {
+      const legacySkipText = entries.find((row) => row.setting_key === 'ocr_skip_text')?.setting_value;
+      map.set('ocr_text_handling', legacySkipText === 'false' ? 'redo-ocr' : editableDefaultSettings.ocr_text_handling);
+    }
 
     return editableSettingKeys.map((key) => ({ key, value: map.get(key) ?? editableDefaultSettings[key] }));
   } finally {
