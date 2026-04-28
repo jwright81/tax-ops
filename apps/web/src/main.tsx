@@ -292,6 +292,7 @@ function App() {
   const officeName = settingsMap.office_name || 'Tax Office';
   const officeSettings = settings.filter((setting) => officeSettingKeys.includes(setting.key as typeof officeSettingKeys[number]));
   const ocrMode = settingDrafts.ocr_mode === 'external' ? 'external' : 'internal';
+  const ocrSettingsDisabled = !isAdmin || ocrMode === 'external';
   const jobsEnabled = isEnabled(settingDrafts.ocr_jobs_enabled, true);
   const rotateThresholdEnabled = isEnabled(settingDrafts.ocr_rotate_pages_threshold_enabled, false);
   const sidecarEnabled = isEnabled(settingDrafts.ocr_sidecar, true);
@@ -447,11 +448,13 @@ function App() {
     event.preventDefault();
     if (!token) return;
     setError(null);
+    setSuccessMessage(null);
     try {
       const payload = Object.entries(settingDrafts).map(([key, value]) => ({ key, value }));
       const response = await api<{ settings: Setting[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ settings: payload }) }, token);
       setSettings(response.settings);
       setSettingDrafts(withSettingDefaults(response.settings));
+      setSuccessMessage('Settings saved.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save settings');
     }
@@ -609,22 +612,29 @@ function App() {
 
         {activeTab === 'settings' ? (
           <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-            <Panel title="Office settings" subtitle="Only true office-level settings live here; system paths stay container-controlled">
+            <Panel title="Settings" subtitle="Manage office-level behavior and OCR defaults without exposing container-controlled paths.">
               <form className="grid gap-6" onSubmit={saveSettings}>
-                <div className="grid gap-4 md:grid-cols-2">
-                  {officeSettings.map((setting) => (
-                    <label className="grid gap-2 text-sm" key={setting.key}>
-                      <span className="text-slate-300">{setting.key}</span>
-                      {setting.key === 'auto_create_jobs' ? (
-                        <select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, [setting.key]: event.target.value }))}>
-                          <option value="true">true</option>
-                          <option value="false">false</option>
-                        </select>
-                      ) : (
-                        <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, [setting.key]: event.target.value }))} />
-                      )}
-                    </label>
-                  ))}
+                <div className="rounded-2xl border border-line bg-[#0d1422] p-5">
+                  <div>
+                    <h3 className="text-base font-semibold text-text">Office settings</h3>
+                    <p className="mt-1 text-sm text-slate-300">Only true office-level settings live here; system paths stay container-controlled.</p>
+                  </div>
+
+                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    {officeSettings.map((setting) => (
+                      <label className="grid gap-2 text-sm" key={setting.key}>
+                        <span className="text-slate-300">{setting.key}</span>
+                        {setting.key === 'auto_create_jobs' ? (
+                          <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, [setting.key]: event.target.value }))}>
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                          </select>
+                        ) : (
+                          <input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, [setting.key]: event.target.value }))} />
+                        )}
+                      </label>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="rounded-2xl border border-line bg-[#0d1422] p-5">
@@ -643,17 +653,19 @@ function App() {
                       <span className="text-xs text-slate-500">Internal runs OCRmyPDF in the worker. External mode is saved now, but automatic handoff/import is not fully wired yet.</span>
                     </label>
 
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={isEnabled(settingDrafts.ocr_deskew, true)} disabled={!isAdmin} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_deskew: String(event.target.checked) }))} />--deskew</label>
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={isEnabled(settingDrafts.ocr_rotate_pages, true)} disabled={!isAdmin} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages: String(event.target.checked) }))} />--rotate-pages</label>
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={jobsEnabled} disabled={!isAdmin} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_jobs_enabled: String(event.target.checked) }))} />--jobs</label>
-                    {jobsEnabled ? <label className="grid gap-2 text-sm"><span className="text-slate-300">Jobs value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} inputMode="numeric" value={settingDrafts.ocr_jobs ?? '1'} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_jobs: event.target.value }))} /></label> : <div />}
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={isEnabled(settingDrafts.ocr_skip_text, true)} disabled={!isAdmin} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_skip_text: String(event.target.checked) }))} />--skip-text</label>
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={sidecarEnabled} disabled={!isAdmin} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_sidecar: String(event.target.checked) }))} />--sidecar</label>
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={rotateThresholdEnabled} disabled={!isAdmin} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages_threshold_enabled: String(event.target.checked) }))} />--rotate-pages-threshold</label>
-                    {rotateThresholdEnabled ? <label className="grid gap-2 text-sm"><span className="text-slate-300">Threshold value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} inputMode="decimal" value={settingDrafts.ocr_rotate_pages_threshold ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages_threshold: event.target.value }))} /></label> : <div />}
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean, false)} disabled={!isAdmin} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_clean: String(event.target.checked) }))} />--clean</label>
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean_final, false)} disabled={!isAdmin} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_clean_final: String(event.target.checked) }))} />--clean-final</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_deskew, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_deskew: String(event.target.checked) }))} />--deskew</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_rotate_pages, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages: String(event.target.checked) }))} />--rotate-pages</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={jobsEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_jobs_enabled: String(event.target.checked) }))} />--jobs</label>
+                    {jobsEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Jobs value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="numeric" value={settingDrafts.ocr_jobs ?? '1'} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_jobs: event.target.value }))} /></label> : <div />}
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_skip_text, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_skip_text: String(event.target.checked) }))} />--skip-text</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={sidecarEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_sidecar: String(event.target.checked) }))} />--sidecar</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={rotateThresholdEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages_threshold_enabled: String(event.target.checked) }))} />--rotate-pages-threshold</label>
+                    {rotateThresholdEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Threshold value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="decimal" value={settingDrafts.ocr_rotate_pages_threshold ?? ''} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_rotate_pages_threshold: event.target.value }))} /></label> : <div />}
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_clean: String(event.target.checked) }))} />--clean</label>
+                    <label className={`inline-flex items-center gap-2 text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean_final, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDrafts((current) => ({ ...current, ocr_clean_final: String(event.target.checked) }))} />--clean-final</label>
                   </div>
+
+                  {ocrMode === 'external' ? <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">OCRmyPDF options are disabled while OCR Mode is set to external.</div> : null}
 
                   <div className="mt-5 rounded-xl border border-line bg-[#09111d] px-4 py-3 text-sm text-slate-300">
                     <div className="text-xs uppercase tracking-[0.12em] text-muted">Generated command preview</div>
@@ -662,7 +674,10 @@ function App() {
                   </div>
                 </div>
 
-                <div><button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={!isAdmin} type="submit">Save settings</button></div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={!isAdmin} type="submit">Save settings</button>
+                  {successMessage === 'Settings saved.' ? <span className="text-sm text-emerald-300">Saved successfully.</span> : null}
+                </div>
               </form>
             </Panel>
 
