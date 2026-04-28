@@ -697,15 +697,15 @@ function App() {
   }
 
   return (
-    <main className="min-h-screen bg-bg px-4 py-4 text-text sm:px-6 sm:py-6">
-      <div className="mx-auto flex max-w-7xl flex-col gap-4 lg:flex-row lg:gap-6">
-        <aside className="flex w-full max-w-full flex-col rounded-[28px] border border-line bg-[#0a0f1c] p-3 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] lg:sticky lg:top-6 lg:h-[calc(100vh-3rem)] lg:w-64 lg:min-w-64">
-          <div className="px-3 pb-4 pt-2">
+    <main className="min-h-screen bg-bg text-text">
+      <div className="flex min-h-screen w-full flex-col lg:flex-row">
+        <aside className="flex w-full flex-col border-b border-line bg-[#0a0f1c] lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:min-w-64 lg:border-b-0 lg:border-r">
+          <div className="px-4 pb-4 pt-5">
             <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{officeName}</div>
-            <div className="mt-2 text-2xl font-semibold tracking-tight text-text">tax-ops</div>
+            <div className="mt-2 text-2xl font-semibold tracking-tight text-text">TaxOps</div>
           </div>
 
-          <nav className="grid gap-1">
+          <nav className="grid gap-1 px-3">
             <button
               className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition ${activeSection === 'clients' ? 'bg-white/8 text-white' : 'text-slate-300 hover:bg-white/5'}`}
               onClick={() => {
@@ -716,54 +716,34 @@ function App() {
               <span>Clients</span>
             </button>
 
-            <div className="rounded-2xl border border-line/80 bg-white/[0.02] p-1">
-              <button
-                className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left text-sm text-slate-300 transition hover:bg-white/5"
-                onClick={() => setToolsExpanded((current) => !current)}
-                type="button"
-              >
-                <span>Tools</span>
-                <span className={`text-xs text-slate-500 transition ${toolsExpanded ? 'rotate-180' : ''}`}>⌄</span>
-              </button>
-              {toolsExpanded ? (
-                <div className="mt-1 grid gap-1 border-t border-line/70 pt-1">
-                  <button
-                    className={`rounded-xl px-3 py-2 text-left text-sm transition ${activeSection === 'extractor1099b' ? 'bg-accent text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
-                    onClick={() => {
-                      setActiveSection('extractor1099b');
-                      setProfileMenuOpen(false);
-                    }}
-                    type="button"
-                  >
-                    1099-B Extractor
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            {isAdmin ? (
-              <button
-                className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition ${activeSection === 'admin' ? 'bg-white/8 text-white' : 'text-slate-300 hover:bg-white/5'}`}
-                onClick={() => {
-                  setActiveSection('admin');
-                  setProfileMenuOpen(false);
-                }}
-                type="button"
-              >
-                <span>Admin</span>
-              </button>
+            <button
+              className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition ${activeSection === 'extractor1099b' ? 'bg-white/8 text-white' : 'text-slate-300 hover:bg-white/5'}`}
+              onClick={() => setToolsExpanded((current) => !current)}
+              type="button"
+            >
+              <span>Tools</span>
+              <span className={`text-xs text-slate-500 transition ${toolsExpanded ? 'rotate-180' : ''}`}>⌄</span>
+            </button>
+            {toolsExpanded ? (
+              <div className="grid gap-1">
+                <button
+                  className={`rounded-xl px-3 py-2 text-left text-sm transition ${activeSection === 'extractor1099b' ? 'bg-accent text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
+                  onClick={() => {
+                    setActiveSection('extractor1099b');
+                    setProfileMenuOpen(false);
+                  }}
+                  type="button"
+                >
+                  <span className="block pl-4">1099-B Extractor</span>
+                </button>
+              </div>
             ) : null}
           </nav>
 
-          <div className="mt-4 rounded-2xl border border-line bg-[#0d1422] px-4 py-3">
-            <div className="text-[11px] uppercase tracking-[0.14em] text-muted">Workspace</div>
-            <div className="mt-2 text-sm text-slate-300">Compact shell for admin workflows now, with client and tool surfaces staged intentionally.</div>
-          </div>
-
-          <div className="mt-auto pt-4">
+          <div className="mt-auto border-t border-line px-3 py-3">
             <div className="relative">
               <button
-                className="flex w-full items-center justify-between rounded-2xl border border-line bg-[#0d1422] px-4 py-3 text-left transition hover:bg-white/5"
+                className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition hover:bg-white/5"
                 onClick={() => setProfileMenuOpen((current) => !current)}
                 type="button"
               >
@@ -775,8 +755,20 @@ function App() {
               </button>
               {profileMenuOpen ? (
                 <div className="absolute inset-x-0 bottom-[calc(100%+0.5rem)] rounded-2xl border border-line bg-[#11192b] p-2 shadow-2xl">
+                  {isAdmin ? (
+                    <button
+                      className="w-full rounded-xl px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-white/5"
+                      onClick={() => {
+                        setActiveSection('admin');
+                        setProfileMenuOpen(false);
+                      }}
+                      type="button"
+                    >
+                      Admin
+                    </button>
+                  ) : null}
                   <button className="w-full rounded-xl px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-white/5" onClick={handleLogout} type="button">
-                    Log out
+                    Logout
                   </button>
                 </div>
               ) : null}
@@ -784,7 +776,7 @@ function App() {
           </div>
         </aside>
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 px-4 py-4 sm:px-6 sm:py-6">
           <header className="mb-6 rounded-[28px] border border-line bg-panel px-5 py-5 sm:px-6">
             <div className="text-xs uppercase tracking-[0.16em] text-muted">{activeSection === 'admin' ? 'Admin workspace' : activeSection === 'clients' ? 'Clients workspace' : 'Tool workspace'}</div>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-text sm:text-4xl">
