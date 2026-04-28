@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './styles.css';
 
 type UserRole = 'admin' | 'staff';
-type AppSection = 'admin' | 'clients' | 'tools';
+type AppSection = 'admin' | 'clients' | 'extractor1099b';
 type AdminTab = 'overview' | 'users' | 'settings' | 'review';
 
 interface User {
@@ -370,8 +370,10 @@ function ChangePasswordScreen({ token, user, onComplete }: { token: string; user
 
 function App() {
   const [token, setToken] = useState<string | null>(() => getStoredToken());
-  const [activeSection, setActiveSection] = useState<AppSection>('admin');
+  const [activeSection, setActiveSection] = useState<AppSection>('clients');
   const [activeAdminTab, setActiveAdminTab] = useState<AdminTab>('overview');
+  const [toolsExpanded, setToolsExpanded] = useState(true);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [me, setMe] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [settings, setSettings] = useState<Setting[]>([]);
@@ -563,6 +565,17 @@ function App() {
     }
   }, [isAdmin, activeSection]);
 
+  function handleLogout() {
+    setStoredToken(null);
+    setToken(null);
+    setMe(null);
+    setUsers([]);
+    setSettings([]);
+    setSettingsDirty(false);
+    setReviewDirty(false);
+    setProfileMenuOpen(false);
+  }
+
   const stats = useMemo(
     () => ({
       totalUsers: users.length,
@@ -684,52 +697,113 @@ function App() {
   }
 
   return (
-    <main className="min-h-screen bg-bg px-6 py-8 text-text">
-      <div className="mx-auto grid max-w-7xl gap-6">
-        <header className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="text-xs uppercase tracking-[0.16em] text-muted">{officeName}</div>
-            <h1 className="mt-2 text-4xl font-semibold tracking-tight">tax-ops</h1>
-            <p className="mt-2 max-w-2xl text-sm text-slate-300">Operations shell for admin oversight now, with clients and tools sections staged for the next phase.</p>
+    <main className="min-h-screen bg-bg px-4 py-4 text-text sm:px-6 sm:py-6">
+      <div className="mx-auto flex max-w-7xl flex-col gap-4 lg:flex-row lg:gap-6">
+        <aside className="flex w-full max-w-full flex-col rounded-[28px] border border-line bg-[#0a0f1c] p-3 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] lg:sticky lg:top-6 lg:h-[calc(100vh-3rem)] lg:w-64 lg:min-w-64">
+          <div className="px-3 pb-4 pt-2">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{officeName}</div>
+            <div className="mt-2 text-2xl font-semibold tracking-tight text-text">tax-ops</div>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="rounded-full border border-line px-3 py-2 text-sm text-slate-300">Signed in as {me?.username ?? '...'}</div>
-            <button className="rounded-xl border border-line px-4 py-2 text-sm text-slate-200 hover:bg-white/5" onClick={() => {
-              setStoredToken(null);
-              setToken(null);
-              setMe(null);
-              setUsers([]);
-              setSettings([]);
-              setSettingsDirty(false);
-              setReviewDirty(false);
-            }}>
-              Log out
+
+          <nav className="grid gap-1">
+            <button
+              className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition ${activeSection === 'clients' ? 'bg-white/8 text-white' : 'text-slate-300 hover:bg-white/5'}`}
+              onClick={() => {
+                setActiveSection('clients');
+                setProfileMenuOpen(false);
+              }}
+            >
+              <span>Clients</span>
             </button>
-          </div>
-        </header>
 
-        {error ? <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{error}</div> : null}
-        {successMessage ? <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">{successMessage}</div> : null}
+            <div className="rounded-2xl border border-line/80 bg-white/[0.02] p-1">
+              <button
+                className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left text-sm text-slate-300 transition hover:bg-white/5"
+                onClick={() => setToolsExpanded((current) => !current)}
+                type="button"
+              >
+                <span>Tools</span>
+                <span className={`text-xs text-slate-500 transition ${toolsExpanded ? 'rotate-180' : ''}`}>⌄</span>
+              </button>
+              {toolsExpanded ? (
+                <div className="mt-1 grid gap-1 border-t border-line/70 pt-1">
+                  <button
+                    className={`rounded-xl px-3 py-2 text-left text-sm transition ${activeSection === 'extractor1099b' ? 'bg-accent text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
+                    onClick={() => {
+                      setActiveSection('extractor1099b');
+                      setProfileMenuOpen(false);
+                    }}
+                    type="button"
+                  >
+                    1099-B Extractor
+                  </button>
+                </div>
+              ) : null}
+            </div>
 
-        <div className="rounded-2xl border border-line bg-panel p-3">
-          <nav className="flex flex-wrap gap-2">
-            {([
-              ['admin', 'Admin'],
-              ['clients', 'Clients'],
-              ['tools', 'Tools'],
-            ] as [AppSection, string][]).map(([section, label]) => {
-              const hidden = section === 'admin' && !isAdmin;
-              if (hidden) return null;
-              return (
-                <button key={section} className={`rounded-xl px-4 py-2 text-sm transition ${activeSection === section ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`} onClick={() => setActiveSection(section)}>
-                  {label}
-                </button>
-              );
-            })}
+            {isAdmin ? (
+              <button
+                className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition ${activeSection === 'admin' ? 'bg-white/8 text-white' : 'text-slate-300 hover:bg-white/5'}`}
+                onClick={() => {
+                  setActiveSection('admin');
+                  setProfileMenuOpen(false);
+                }}
+                type="button"
+              >
+                <span>Admin</span>
+              </button>
+            ) : null}
           </nav>
-        </div>
 
-        {activeSection === 'admin' && isAdmin ? (
+          <div className="mt-4 rounded-2xl border border-line bg-[#0d1422] px-4 py-3">
+            <div className="text-[11px] uppercase tracking-[0.14em] text-muted">Workspace</div>
+            <div className="mt-2 text-sm text-slate-300">Compact shell for admin workflows now, with client and tool surfaces staged intentionally.</div>
+          </div>
+
+          <div className="mt-auto pt-4">
+            <div className="relative">
+              <button
+                className="flex w-full items-center justify-between rounded-2xl border border-line bg-[#0d1422] px-4 py-3 text-left transition hover:bg-white/5"
+                onClick={() => setProfileMenuOpen((current) => !current)}
+                type="button"
+              >
+                <div>
+                  <div className="text-sm font-medium text-text">{me?.username ?? '...'}</div>
+                  <div className="text-xs text-slate-500">Signed in</div>
+                </div>
+                <span className={`text-xs text-slate-500 transition ${profileMenuOpen ? 'rotate-180' : ''}`}>⌄</span>
+              </button>
+              {profileMenuOpen ? (
+                <div className="absolute inset-x-0 bottom-[calc(100%+0.5rem)] rounded-2xl border border-line bg-[#11192b] p-2 shadow-2xl">
+                  <button className="w-full rounded-xl px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-white/5" onClick={handleLogout} type="button">
+                    Log out
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </aside>
+
+        <div className="min-w-0 flex-1">
+          <header className="mb-6 rounded-[28px] border border-line bg-panel px-5 py-5 sm:px-6">
+            <div className="text-xs uppercase tracking-[0.16em] text-muted">{activeSection === 'admin' ? 'Admin workspace' : activeSection === 'clients' ? 'Clients workspace' : 'Tool workspace'}</div>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-text sm:text-4xl">
+              {activeSection === 'admin' ? 'Admin' : activeSection === 'clients' ? 'Clients' : '1099-B Extractor'}
+            </h1>
+            <p className="mt-2 max-w-2xl text-sm text-slate-300">
+              {activeSection === 'admin'
+                ? 'Admin oversight, OCR controls, and review workflows stay gated exactly as before.'
+                : activeSection === 'clients'
+                  ? 'Client-facing workflow space is staged here so the new shell feels intentional before the module is fully built.'
+                  : 'Tooling area for future extraction utilities, starting with a dedicated 1099-B entry point.'}
+            </p>
+          </header>
+
+          {error ? <div className="mb-6 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{error}</div> : null}
+          {successMessage ? <div className="mb-6 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">{successMessage}</div> : null}
+
+          <div className="grid gap-6">
+            {activeSection === 'admin' && isAdmin ? (
           <>
             <nav className="flex flex-wrap gap-2">
               {([
@@ -996,11 +1070,13 @@ function App() {
               </section>
             ) : null}
           </>
-        ) : null}
+            ) : null}
 
-        {activeSection === 'admin' && !isAdmin ? <AdminAccessNotice /> : null}
-        {activeSection === 'clients' ? <PlaceholderSection title="Clients" description="This area is reserved for client-facing workflow, filing organization, and future client record tools." /> : null}
-        {activeSection === 'tools' ? <PlaceholderSection title="Tools" description="This area is reserved for utilities like 1099-B/TXF helpers, office productivity tools, and future operational shortcuts." /> : null}
+            {activeSection === 'admin' && !isAdmin ? <AdminAccessNotice /> : null}
+            {activeSection === 'clients' ? <PlaceholderSection title="Clients" description="This area is reserved for client-facing workflow, filing organization, and future client record tools." /> : null}
+            {activeSection === 'extractor1099b' ? <PlaceholderSection title="1099-B Extractor" description="This tool slot is ready for the dedicated 1099-B extraction flow, with room for future import, parsing, and review steps." /> : null}
+          </div>
+        </div>
       </div>
     </main>
   );
