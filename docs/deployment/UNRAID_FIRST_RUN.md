@@ -114,17 +114,32 @@ After the container starts:
 Check that these OCR settings are present:
 
 - `ocr_mode`
-- `ocr_command`
-- `ocr_output_folder`
+- `ocr_deskew`
+- `ocr_rotate_pages`
+- `ocr_jobs_enabled`
+- `ocr_jobs`
+- `ocr_skip_text`
+- `ocr_sidecar`
+- `ocr_rotate_pages_threshold_enabled`
+- `ocr_rotate_pages_threshold`
+- `ocr_clean`
+- `ocr_clean_final`
 
 Recommended first values:
 
-- `ocr_mode=external`
-- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --rotate-pages --jobs 1 --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
-- `ocr_output_folder=/data/processed/ocr`
-- Treat `ocr_command` as an advanced override, not a host-side dependency.
+- `ocr_mode=internal`
+- `ocr_deskew=true`
+- `ocr_rotate_pages=true`
+- `ocr_jobs_enabled=true`
+- `ocr_jobs=1`
+- `ocr_skip_text=true`
+- `ocr_sidecar=true`
+- `ocr_rotate_pages_threshold_enabled=false`
+- `ocr_rotate_pages_threshold=14.0`
+- `ocr_clean=false`
+- `ocr_clean_final=false`
 
-Note: these defaults were intentionally aligned with the known-good `ocrmypdf-auto` behavior after live testing. The worker still captures extracted text from the sidecar internally, then deletes the sidecar so users never see lingering `.txt` files.
+Note: these defaults were intentionally aligned with the known-good `ocrmypdf-auto` behavior after live testing. When sidecar is enabled, the worker captures extracted text from it and deletes the temporary `.txt` file afterward. If sidecar is disabled, extracted text is left blank instead of being faked.
 
 ---
 

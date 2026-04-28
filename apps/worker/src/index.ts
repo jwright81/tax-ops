@@ -17,9 +17,23 @@ const env = {
   DB_PASSWORD: process.env.DB_PASSWORD || '',
   WATCH_FOLDER: process.env.WATCH_FOLDER || '/data/incoming',
   PROCESSED_FOLDER: process.env.PROCESSED_FOLDER || '/data/processed',
-  OCR_COMMAND: process.env.OCR_COMMAND || '/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --rotate-pages --jobs 1 --skip-text --sidecar "{sidecar}" "{input}" "{output}"',
+  OCR_BINARY: process.env.OCR_BINARY || '/opt/ocrmypdf-venv/bin/ocrmypdf',
   WATCH_STABLE_MS: Number(process.env.WATCH_STABLE_MS || 8000),
 };
+
+const defaultSettings = {
+  ocr_mode: 'internal',
+  ocr_deskew: 'true',
+  ocr_rotate_pages: 'true',
+  ocr_jobs_enabled: 'true',
+  ocr_jobs: '1',
+  ocr_skip_text: 'true',
+  ocr_sidecar: 'true',
+  ocr_rotate_pages_threshold_enabled: 'false',
+  ocr_rotate_pages_threshold: '14.0',
+  ocr_clean: 'false',
+  ocr_clean_final: 'false',
+} as const;
 
 const pool = mariadb.createPool({
   host: env.DB_HOST,
@@ -54,7 +68,10 @@ async function getSettingsMap() {
   const conn = await pool.getConnection();
   try {
     const rows = await conn.query('SELECT setting_key, setting_value FROM system_settings');
-    return Object.fromEntries((Array.isArray(rows) ? rows : []).map((row) => [row.setting_key, row.setting_value]));
+    return {
+      ...defaultSettings,
+      ...Object.fromEntries((Array.isArray(rows) ? rows : []).map((row) => [row.setting_key, row.setting_value])),
+    };
   } finally {
     conn.release();
   }
@@ -132,7 +149,7 @@ async function updateJobStatus(jobId: number, status: 'processing' | 'completed'
   }
 }
 
-async function updateDocument(jobId: number, input: { status: 'review' | 'error'; formType: string; issuer: string; taxYear: string; clientName: string; ssnLast4: string; confidenceScore: number; extractedText: string; currentPath: string; ocrStatus: 'processing' | 'completed' | 'failed'; ocrProvider: string; reviewNotes: string; }) {
+async function updateDocument(jobId: number, input: { status: 'intake' | 'review' | 'error'; formType: string; issuer: string; taxYear: string; clientName: string; ssnLast4: string; confidenceScore: number; extractedText: string; currentPath: string; ocrStatus: 'pending' | 'processing' | 'completed' | 'failed'; ocrProvider: string; reviewNotes: string; }) {
   const conn = await pool.getConnection();
   try {
     await conn.query(
@@ -146,7 +163,7 @@ async function updateDocument(jobId: number, input: { status: 'review' | 'error'
   }
 }
 
-async function markDocumentOcr(jobId: number, status: 'processing' | 'completed' | 'failed', provider: string) {
+async function markDocumentOcr(jobId: number, status: 'processing' | 'completed' | 'failed' | 'pending', provider: string) {
   const conn = await pool.getConnection();
   try {
     await conn.query(
@@ -178,28 +195,82 @@ function inferMetadata(fileName: string) {
   };
 }
 
-function renderCommand(template: string, inputPath: string, outputPath: string, sidecarPath: string) {
-  return template
-    .replaceAll('{input}', inputPath)
-    .replaceAll('{output}', outputPath)
-    .replaceAll('{sidecar}', sidecarPath);
+function settingEnabled(value: string | undefined, fallback: boolean) {
+  if (value == null) return fallback;
+  return value === 'true';
 }
 
-async function runOcrStep(sourcePath: string, fileName: string) {
+function normalizePositiveInt(value: string | undefined, fallback: number) {
+  const parsed = Number.parseInt(value || '', 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return parsed;
+}
+
+function normalizePositiveNumber(value: string | undefined) {
+  const parsed = Number.parseFloat(value || '');
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function buildInternalOcrCommand(settings: Record<string, string>, sourcePath: string, outputPath: string, sidecarPath: string) {
+  const args = [env.OCR_BINARY];
+
+  if (settingEnabled(settings.ocr_deskew, true)) args.push('--deskew');
+  if (settingEnabled(settings.ocr_rotate_pages, true)) args.push('--rotate-pages');
+  if (settingEnabled(settings.ocr_jobs_enabled, true)) args.push('--jobs', String(normalizePositiveInt(settings.ocr_jobs, 1)));
+  if (settingEnabled(settings.ocr_skip_text, true)) args.push('--skip-text');
+  if (settingEnabled(settings.ocr_sidecar, true)) args.push('--sidecar', sidecarPath);
+  if (settingEnabled(settings.ocr_rotate_pages_threshold_enabled, false)) {
+    const threshold = normalizePositiveNumber(settings.ocr_rotate_pages_threshold);
+    if (threshold !== null) args.push('--rotate-pages-threshold', String(threshold));
+  }
+  if (settingEnabled(settings.ocr_clean, false)) args.push('--clean');
+  if (settingEnabled(settings.ocr_clean_final, false)) args.push('--clean-final');
+
+  args.push(sourcePath, outputPath);
+  return args.map(shellQuote).join(' ');
+}
+
+async function runOcrStep(sourcePath: string, fileName: string, settings: Record<string, string>) {
+  const ocrMode = settings.ocr_mode === 'external' ? 'external' : 'internal';
+
+  if (ocrMode === 'external') {
+    return {
+      provider: 'external:pending',
+      extractedText: '',
+      notes: 'External OCR mode is saved, but automatic external folder handoff/import is not wired yet. This document stayed in intake without extracted text.',
+      outputPath: sourcePath,
+      ocrStatus: 'pending' as const,
+      documentStatus: 'intake' as const,
+    };
+  }
+
   const outputRoot = path.join(env.PROCESSED_FOLDER, 'ocr');
   await fs.mkdir(outputRoot, { recursive: true });
   const outputPath = path.join(outputRoot, fileName);
   const sidecarPath = `${outputPath}.txt`;
-  const command = renderCommand(env.OCR_COMMAND, sourcePath, outputPath, sidecarPath);
+  const command = buildInternalOcrCommand(settings, sourcePath, outputPath, sidecarPath);
   const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
   const details = [stderr?.trim(), stdout?.trim()].filter(Boolean).join(' | ');
-  const extractedText = await fs.readFile(sidecarPath, 'utf8').catch(() => '');
-  await fs.unlink(sidecarPath).catch(() => undefined);
+  const extractedText = settingEnabled(settings.ocr_sidecar, true)
+    ? await fs.readFile(sidecarPath, 'utf8').catch(() => '')
+    : '';
+
+  if (settingEnabled(settings.ocr_sidecar, true)) {
+    await fs.unlink(sidecarPath).catch(() => undefined);
+  }
+
   return {
     provider: 'container:ocrmypdf',
     extractedText: extractedText.trim(),
     notes: details || `Bundled OCR command completed. Extracted text ${extractedText.trim() ? 'captured' : 'not captured'}.`,
     outputPath,
+    ocrStatus: 'completed' as const,
+    documentStatus: 'review' as const,
   };
 }
 
@@ -222,26 +293,27 @@ async function scanWatchFolder() {
 }
 
 async function processQueuedJobs() {
-  const settings = await getSettingsMap();
   const jobs = await getQueuedJobs(5);
   for (const job of jobs) {
     try {
+      const settings = await getSettingsMap();
+      const provider = settings.ocr_mode === 'external' ? 'external:pending' : 'container:ocrmypdf';
       await updateJobStatus(job.id, 'processing', 'Worker picked up job');
-      await markDocumentOcr(job.id, 'processing', 'container:ocrmypdf');
+      await markDocumentOcr(job.id, 'processing', provider);
       const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
       const originalFilename = payload.originalFilename || path.basename(job.source_path);
       const inferred = inferMetadata(originalFilename);
-      const ocr = await runOcrStep(job.source_path, originalFilename);
+      const ocr = await runOcrStep(job.source_path, originalFilename, settings);
       await updateDocument(job.id, {
-        status: 'review',
+        status: ocr.documentStatus,
         ...inferred,
         extractedText: ocr.extractedText,
         currentPath: ocr.outputPath,
-        ocrStatus: 'completed',
+        ocrStatus: ocr.ocrStatus,
         ocrProvider: ocr.provider,
         reviewNotes: ocr.notes,
       });
-      await updateJobStatus(job.id, 'completed', `OCR/classification step complete: ${ocr.notes}`, { ...inferred, ocrProvider: ocr.provider, outputPath: ocr.outputPath, notes: ocr.notes });
+      await updateJobStatus(job.id, 'completed', `OCR/classification step complete: ${ocr.notes}`, { ...inferred, ocrProvider: ocr.provider, outputPath: ocr.outputPath, notes: ocr.notes, ocrStatus: ocr.ocrStatus });
       console.log(`[worker] completed job #${job.id} (${originalFilename})`);
     } catch (error) {
       await markDocumentOcr(job.id, 'failed', 'container:ocrmypdf');

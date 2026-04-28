@@ -8,7 +8,36 @@ export interface SystemSetting {
 const editableDefaultSettings: Record<string, string> = {
   office_name: 'Tax Office',
   auto_create_jobs: 'true',
+  ocr_mode: 'internal',
+  ocr_deskew: 'true',
+  ocr_rotate_pages: 'true',
+  ocr_jobs_enabled: 'true',
+  ocr_jobs: '1',
+  ocr_skip_text: 'true',
+  ocr_sidecar: 'true',
+  ocr_rotate_pages_threshold_enabled: 'false',
+  ocr_rotate_pages_threshold: '14.0',
+  ocr_clean: 'false',
+  ocr_clean_final: 'false',
 };
+
+const editableSettingKeys = [
+  'office_name',
+  'auto_create_jobs',
+  'ocr_mode',
+  'ocr_deskew',
+  'ocr_rotate_pages',
+  'ocr_jobs_enabled',
+  'ocr_jobs',
+  'ocr_skip_text',
+  'ocr_sidecar',
+  'ocr_rotate_pages_threshold_enabled',
+  'ocr_rotate_pages_threshold',
+  'ocr_clean',
+  'ocr_clean_final',
+] as const;
+
+const editableSettingKeySet = new Set<string>(editableSettingKeys);
 
 export async function ensureDefaultSettings() {
   const conn = await pool.getConnection();
@@ -29,22 +58,24 @@ export async function ensureDefaultSettings() {
 export async function listSettings() {
   const conn = await pool.getConnection();
   try {
-    const rows = await conn.query(
-      'SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN (?, ?) ORDER BY setting_key ASC',
-      ['auto_create_jobs', 'office_name'],
+    const rows = await conn.query('SELECT setting_key, setting_value FROM system_settings');
+    const map = new Map(
+      (Array.isArray(rows) ? rows : [])
+        .filter((row) => editableSettingKeySet.has(row.setting_key))
+        .map((row) => [row.setting_key, row.setting_value]),
     );
-    return (Array.isArray(rows) ? rows : []).map((row) => ({ key: row.setting_key, value: row.setting_value }));
+
+    return editableSettingKeys.map((key) => ({ key, value: map.get(key) ?? editableDefaultSettings[key] }));
   } finally {
     conn.release();
   }
 }
 
 export async function upsertSettings(settings: SystemSetting[]) {
-  const allowed = new Set(['auto_create_jobs', 'office_name']);
   const conn = await pool.getConnection();
   try {
     for (const setting of settings) {
-      if (!allowed.has(setting.key)) continue;
+      if (!editableSettingKeySet.has(setting.key)) continue;
       await conn.query(
         `INSERT INTO system_settings (setting_key, setting_value)
          VALUES (?, ?)

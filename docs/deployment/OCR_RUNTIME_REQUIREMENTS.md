@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`tax-ops` ships with OCRmyPDF/Tesseract bundled in the container image, with an OCR command override available for advanced setups.
+`tax-ops` ships with OCRmyPDF/Tesseract bundled in the container image. OCR behavior is now stored as structured settings in the app instead of a single freeform command override.
 
-Default setting:
+Default internal command preview:
 
 ```bash
 /opt/ocrmypdf-venv/bin/ocrmypdf --deskew --rotate-pages --jobs 1 --skip-text --sidecar "{sidecar}" "{input}" "{output}"
@@ -24,24 +24,31 @@ Additional dependencies may be required depending on base image/package source.
 
 ## Container note
 
-The current codebase is wired for OCR command execution inside the container image, with an advanced override still available if you need to swap the command.
+The current codebase is wired for OCR command execution inside the container image when `ocr_mode=internal`.
 
 ### Default — bundled OCR stack
 OCRmyPDF/Tesseract are expected to be present in the image.
 
-### Advanced — override the OCR command
-Useful only when you intentionally need a different OCR command inside the container.
+### External mode
+External mode is a first-pass foundation only right now: the setting is saved and visible, but automatic external folder handoff/import is not fully wired yet.
 
 ## Expected settings
 
-- `ocr_mode=external`
-- `ocr_command=/opt/ocrmypdf-venv/bin/ocrmypdf --deskew --rotate-pages --jobs 1 --skip-text --sidecar "{sidecar}" "{input}" "{output}"`
-- `ocr_output_folder=/data/processed/ocr`
-- Treat `ocr_command` as an advanced override; the bundled image path should work without host-installed OCR tools.
+- `ocr_mode=internal`
+- `ocr_deskew=true`
+- `ocr_rotate_pages=true`
+- `ocr_jobs_enabled=true`
+- `ocr_jobs=1`
+- `ocr_skip_text=true`
+- `ocr_sidecar=true`
+- `ocr_rotate_pages_threshold_enabled=false`
+- `ocr_rotate_pages_threshold=14.0`
+- `ocr_clean=false`
+- `ocr_clean_final=false`
 
 ## Live-test note
 
-These defaults were intentionally aligned with the known-good `ocrmypdf-auto` behavior after live testing. The worker still reads the sidecar internally for `documents.extracted_text`, then deletes the sidecar file so no `.txt` artifact remains visible to users.
+These defaults were intentionally aligned with the known-good `ocrmypdf-auto` behavior after live testing. When sidecar is enabled, the worker reads it into `documents.extracted_text` and then deletes the temporary `.txt` file. When sidecar is disabled, the worker does not fabricate extracted text.
 
 ## Validation command examples
 
