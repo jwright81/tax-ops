@@ -3,7 +3,8 @@ import ReactDOM from 'react-dom/client';
 import './styles.css';
 
 type UserRole = 'admin' | 'staff';
-type AppTab = 'overview' | 'users' | 'settings' | 'intake' | 'review';
+type AppSection = 'admin' | 'clients' | 'tools';
+type AdminTab = 'overview' | 'users' | 'settings' | 'review';
 
 interface User {
   id: number;
@@ -62,7 +63,12 @@ type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
 
 const tokenKey = 'tax-ops.token';
 const autoRefreshIntervalMs = 5000;
+const pageSize = 5;
 const officeSettingKeys = ['office_name', 'auto_create_jobs'] as const;
+const officeSettingLabels: Record<(typeof officeSettingKeys)[number], string> = {
+  office_name: 'Office Name',
+  auto_create_jobs: 'Auto Create Jobs',
+};
 const ocrDefaultSettings: Record<string, string> = {
   ocr_mode: 'internal',
   ocr_deskew: 'true',
@@ -134,6 +140,18 @@ function setStoredToken(token: string | null) {
   window.localStorage.setItem(tokenKey, token);
 }
 
+function paginateItems<T>(items: T[], page: number, size = pageSize) {
+  const totalPages = Math.max(1, Math.ceil(items.length / size));
+  const safePage = Math.min(Math.max(page, 1), totalPages);
+  const start = (safePage - 1) * size;
+  return {
+    totalPages,
+    currentPage: safePage,
+    items: items.slice(start, start + size),
+    start,
+  };
+}
+
 async function api<T>(path: string, options: RequestInit = {}, token?: string | null): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set('Content-Type', 'application/json');
@@ -162,6 +180,75 @@ function Panel(props: React.PropsWithChildren<{ title: string; subtitle?: string
       </div>
       <div className="mt-5">{props.children}</div>
     </section>
+  );
+}
+
+function Pager({
+  currentPage,
+  totalPages,
+  itemCount,
+  pageSize: currentPageSize,
+  itemLabel,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  itemCount: number;
+  pageSize: number;
+  itemLabel: string;
+  onPageChange: (page: number) => void;
+}) {
+  if (itemCount === 0) return null;
+
+  const start = (currentPage - 1) * currentPageSize + 1;
+  const end = Math.min(itemCount, start + currentPageSize - 1);
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4 text-sm text-slate-300">
+      <div>
+        Showing {start}-{end} of {itemCount} {itemLabel}
+      </div>
+      <div className="flex items-center gap-2">
+        <button className="rounded-lg border border-line px-3 py-2 hover:bg-white/5 disabled:opacity-50" disabled={currentPage <= 1} onClick={() => onPageChange(currentPage - 1)}>
+          Previous
+        </button>
+        <div className="rounded-lg border border-line px-3 py-2 text-xs uppercase tracking-[0.12em] text-muted">
+          Page {currentPage} / {totalPages}
+        </div>
+        <button className="rounded-lg border border-line px-3 py-2 hover:bg-white/5 disabled:opacity-50" disabled={currentPage >= totalPages} onClick={() => onPageChange(currentPage + 1)}>
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlaceholderSection({ title, description }: { title: string; description: string }) {
+  return (
+    <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+      <Panel title={title} subtitle="Planned next-phase workspace">
+        <div className="rounded-2xl border border-dashed border-line bg-[#0d1422] p-6 text-sm text-slate-300">
+          <div className="text-base font-medium text-text">Coming soon</div>
+          <p className="mt-2 max-w-2xl">{description}</p>
+        </div>
+      </Panel>
+      <Panel title="Planning note" subtitle="Kept intentionally lightweight for this pass">
+        <ul className="grid gap-3 text-sm text-slate-300">
+          <li>• Navigation is in place so the next modules can be added without reshuffling the shell again.</li>
+          <li>• Admin-only workflows are now separated from future client-facing and tool-focused areas.</li>
+        </ul>
+      </Panel>
+    </section>
+  );
+}
+
+function AdminAccessNotice() {
+  return (
+    <Panel title="Admin access required" subtitle="This area is hidden for non-admin users.">
+      <div className="rounded-2xl border border-dashed border-line bg-[#0d1422] p-6 text-sm text-slate-300">
+        Your account can still sign in, but admin workflows are intentionally gated to admin-role users.
+      </div>
+    </Panel>
   );
 }
 
@@ -194,7 +281,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: LoginResponse) => void })
         <div>
           <div className="text-xs uppercase tracking-[0.16em] text-muted">tax office ops</div>
           <h1 className="mt-2 text-4xl font-semibold tracking-tight">tax-ops</h1>
-          <p className="mt-3 text-sm text-slate-300">Sign in to manage users, settings, intake jobs, and office workflows.</p>
+          <p className="mt-3 text-sm text-slate-300">Sign in to manage office workflows, OCR settings, review queues, and upcoming client/tools modules.</p>
         </div>
 
         <Panel title="Login" subtitle="Secure sign-in for office staff">
@@ -283,7 +370,8 @@ function ChangePasswordScreen({ token, user, onComplete }: { token: string; user
 
 function App() {
   const [token, setToken] = useState<string | null>(() => getStoredToken());
-  const [activeTab, setActiveTab] = useState<AppTab>('overview');
+  const [activeSection, setActiveSection] = useState<AppSection>('admin');
+  const [activeAdminTab, setActiveAdminTab] = useState<AdminTab>('overview');
   const [me, setMe] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [settings, setSettings] = useState<Setting[]>([]);
@@ -295,7 +383,6 @@ function App() {
   const [resetMap, setResetMap] = useState<Record<number, string>>({});
   const [settingDrafts, setSettingDrafts] = useState<Record<string, string>>({});
   const [settingsDirty, setSettingsDirty] = useState(false);
-  const [intakeForm, setIntakeForm] = useState({ sourcePath: '/data/incoming/sample-scan.pdf', originalFilename: 'sample-scan.pdf', extractedText: '' });
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<DocumentItem | null>(null);
   const [documentStatusFilter, setDocumentStatusFilter] = useState<'all' | 'intake' | 'review' | 'filed' | 'error'>('review');
@@ -303,11 +390,13 @@ function App() {
   const [reviewDirty, setReviewDirty] = useState(false);
   const [rerunBusyMode, setRerunBusyMode] = useState<Exclude<OcrTextHandling, 'skip-text'> | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [jobsPage, setJobsPage] = useState(1);
+  const [reviewPage, setReviewPage] = useState(1);
 
   const isAdmin = me?.role === 'admin';
   const settingsMap = useMemo(() => Object.fromEntries(settings.map((setting) => [setting.key, setting.value])), [settings]);
   const officeName = settingsMap.office_name || 'Tax Office';
-  const officeSettings = settings.filter((setting) => officeSettingKeys.includes(setting.key as typeof officeSettingKeys[number]));
+  const officeSettings = settings.filter((setting) => officeSettingKeys.includes(setting.key as (typeof officeSettingKeys)[number]));
   const ocrMode = settingDrafts.ocr_mode === 'external' ? 'external' : 'internal';
   const ocrSettingsDisabled = !isAdmin || ocrMode === 'external';
   const jobsEnabled = isEnabled(settingDrafts.ocr_jobs_enabled, true);
@@ -315,6 +404,26 @@ function App() {
   const sidecarEnabled = isEnabled(settingDrafts.ocr_sidecar, true);
   const ocrTextHandling = resolveOcrTextHandling(settingDrafts);
   const ocrCommandPreview = buildOcrCommandPreview(settingDrafts);
+
+  const filteredDocuments = useMemo(
+    () => documents.filter((document) => (documentStatusFilter === 'all' ? true : document.status === documentStatusFilter)),
+    [documents, documentStatusFilter],
+  );
+  const pagedJobs = useMemo(() => paginateItems(jobs, jobsPage), [jobs, jobsPage]);
+  const pagedDocuments = useMemo(() => paginateItems(filteredDocuments, reviewPage), [filteredDocuments, reviewPage]);
+
+  const ocrSnapshot = useMemo(() => {
+    const pendingOcrDocs = documents.filter((document) => document.ocrStatus === 'pending' || document.ocrStatus === 'processing').length;
+    const failedOcrDocs = documents.filter((document) => document.ocrStatus === 'failed').length;
+    const externalModeDocs = documents.filter((document) => document.ocrProvider?.startsWith('external')).length;
+
+    return {
+      pendingOcrDocs,
+      failedOcrDocs,
+      externalModeDocs,
+      reviewDocs: documents.filter((document) => document.status === 'review').length,
+    };
+  }, [documents]);
 
   function setSettingDraftValue(key: string, value: string) {
     setSettingsDirty(true);
@@ -422,19 +531,37 @@ function App() {
     const interval = window.setInterval(() => {
       void loadData(token, {
         background: true,
-        preserveSettingDrafts: activeTab === 'settings' && settingsDirty,
+        preserveSettingDrafts: activeAdminTab === 'settings' && settingsDirty,
       });
 
       if (selectedDocumentId) {
         void loadDocument(selectedDocumentId, {
           background: true,
-          preserveReviewDraft: activeTab === 'review' && reviewDirty,
+          preserveReviewDraft: activeAdminTab === 'review' && reviewDirty,
         });
       }
     }, autoRefreshIntervalMs);
 
     return () => window.clearInterval(interval);
-  }, [token, activeTab, settingsDirty, selectedDocumentId, reviewDirty]);
+  }, [token, activeAdminTab, settingsDirty, selectedDocumentId, reviewDirty]);
+
+  useEffect(() => {
+    setJobsPage((current) => Math.min(current, Math.max(1, Math.ceil(jobs.length / pageSize))));
+  }, [jobs.length]);
+
+  useEffect(() => {
+    setReviewPage(1);
+  }, [documentStatusFilter]);
+
+  useEffect(() => {
+    setReviewPage((current) => Math.min(current, Math.max(1, Math.ceil(filteredDocuments.length / pageSize))));
+  }, [filteredDocuments.length]);
+
+  useEffect(() => {
+    if (!isAdmin && activeSection === 'admin') {
+      setActiveSection('clients');
+    }
+  }, [isAdmin, activeSection]);
 
   const stats = useMemo(
     () => ({
@@ -523,20 +650,6 @@ function App() {
     }
   }
 
-  async function queueIntakeJob(event: FormEvent) {
-    event.preventDefault();
-    if (!token) return;
-    setError(null);
-    try {
-      await api('/api/intake/jobs', { method: 'POST', body: JSON.stringify(intakeForm) }, token);
-      setIntakeForm({ sourcePath: '/data/incoming/sample-scan.pdf', originalFilename: 'sample-scan.pdf', extractedText: '' });
-      setActiveTab('overview');
-      await loadData(token);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to queue intake job');
-    }
-  }
-
   async function saveReview(event: FormEvent) {
     event.preventDefault();
     if (!token || !selectedDocumentId) return;
@@ -577,7 +690,7 @@ function App() {
           <div>
             <div className="text-xs uppercase tracking-[0.16em] text-muted">{officeName}</div>
             <h1 className="mt-2 text-4xl font-semibold tracking-tight">tax-ops</h1>
-            <p className="mt-2 max-w-2xl text-sm text-slate-300">MVP control panel for auth, settings, intake jobs, review, and document pipeline foundation.</p>
+            <p className="mt-2 max-w-2xl text-sm text-slate-300">Operations shell for admin oversight now, with clients and tools sections staged for the next phase.</p>
           </div>
           <div className="flex items-center gap-3">
             <div className="rounded-full border border-line px-3 py-2 text-sm text-slate-300">Signed in as {me?.username ?? '...'}</div>
@@ -598,289 +711,296 @@ function App() {
         {error ? <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{error}</div> : null}
         {successMessage ? <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">{successMessage}</div> : null}
 
-        <nav className="flex flex-wrap gap-2">
-          {([
-            ['overview', 'Overview'],
-            ['users', 'Users'],
-            ['settings', 'Settings'],
-            ['intake', 'Intake'],
-            ['review', 'Review'],
-          ] as [AppTab, string][]).map(([tab, label]) => (
-            <button key={tab} className={`rounded-xl px-4 py-2 text-sm transition ${activeTab === tab ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`} onClick={() => setActiveTab(tab)}>
-              {label}
-            </button>
-          ))}
-        </nav>
+        <div className="rounded-2xl border border-line bg-panel p-3">
+          <nav className="flex flex-wrap gap-2">
+            {([
+              ['admin', 'Admin'],
+              ['clients', 'Clients'],
+              ['tools', 'Tools'],
+            ] as [AppSection, string][]).map(([section, label]) => {
+              const hidden = section === 'admin' && !isAdmin;
+              if (hidden) return null;
+              return (
+                <button key={section} className={`rounded-xl px-4 py-2 text-sm transition ${activeSection === section ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`} onClick={() => setActiveSection(section)}>
+                  {label}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
 
-        {activeTab === 'overview' ? (
+        {activeSection === 'admin' && isAdmin ? (
           <>
-            <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-7">
-              {[
-                ['Users', String(stats.totalUsers), 'Total accounts'],
-                ['Admins', String(stats.admins), 'Admin-capable accounts'],
-                ['Active', String(stats.activeUsers), 'Users able to sign in'],
-                ['Forced Reset', String(stats.resets), 'Must change password'],
-                ['Queued Jobs', String(stats.queuedJobs), 'Intake queue'],
-                ['Review Docs', String(stats.reviewDocs), 'Needs document review'],
-                ['OCR Failures', String(stats.failedOcr), 'Need OCR/runtime attention'],
-              ].map(([label, value, hint]) => (
-                <article key={label} className="rounded-2xl border border-line bg-panel p-5">
-                  <div className="text-xs uppercase tracking-[0.12em] text-muted">{label}</div>
-                  <div className="mt-3 text-3xl font-semibold text-text">{value}</div>
-                  <div className="mt-2 text-sm text-slate-300">{hint}</div>
-                </article>
+            <nav className="flex flex-wrap gap-2">
+              {([
+                ['overview', 'Overview'],
+                ['users', 'Users'],
+                ['settings', 'Settings'],
+                ['review', 'Review'],
+              ] as [AdminTab, string][]).map(([tab, label]) => (
+                <button key={tab} className={`rounded-xl px-4 py-2 text-sm transition ${activeAdminTab === tab ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`} onClick={() => setActiveAdminTab(tab)}>
+                  {label}
+                </button>
               ))}
-            </section>
+            </nav>
 
-            <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-              <Panel title="Recent processing jobs" subtitle="Watch queue, OCR execution, and failures" actions={<div className="rounded-full border border-line px-3 py-2 text-xs uppercase tracking-[0.12em] text-muted">{loading ? 'Refreshing…' : `${jobs.length} loaded`}</div>}>
-                <div className="grid gap-3">
-                  {jobs.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-6 text-sm text-slate-400">No jobs queued yet.</div> : null}
-                  {jobs.map((job) => (
-                    <div key={job.id} className="rounded-xl border border-line bg-[#0d1422] px-4 py-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="font-medium">#{job.id} · {job.jobType}</div>
-                        <div className="rounded-full border border-line px-2 py-1 text-xs uppercase tracking-[0.12em] text-slate-300">{job.status}</div>
-                      </div>
-                      <div className="mt-2 text-sm text-slate-300">{job.sourcePath}</div>
-                      <div className="mt-1 text-xs text-slate-500">{job.message || '—'} · {new Date(job.createdAt).toLocaleString()}</div>
-                    </div>
+            {activeAdminTab === 'overview' ? (
+              <>
+                <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-7">
+                  {[
+                    ['Users', String(stats.totalUsers), 'Total accounts'],
+                    ['Admins', String(stats.admins), 'Admin-capable accounts'],
+                    ['Active', String(stats.activeUsers), 'Users able to sign in'],
+                    ['Forced Reset', String(stats.resets), 'Must change password'],
+                    ['Queued Jobs', String(stats.queuedJobs), 'Jobs waiting on worker pickup'],
+                    ['Review Docs', String(stats.reviewDocs), 'Needs document review'],
+                    ['OCR Failures', String(stats.failedOcr), 'Need OCR/runtime attention'],
+                  ].map(([label, value, hint]) => (
+                    <article key={label} className="rounded-2xl border border-line bg-panel p-5">
+                      <div className="text-xs uppercase tracking-[0.12em] text-muted">{label}</div>
+                      <div className="mt-3 text-3xl font-semibold text-text">{value}</div>
+                      <div className="mt-2 text-sm text-slate-300">{hint}</div>
+                    </article>
                   ))}
-                </div>
-              </Panel>
+                </section>
 
-              <Panel title="OCR runtime readiness" subtitle="What the worker expects from the bundled OCR stack">
-                <ul className="grid gap-3 text-sm text-slate-300">
-                  <li>• <span className="text-slate-100">mode</span>: {settingsMap.ocr_mode || 'internal'}</li>
-                  <li>• <span className="text-slate-100">sidecar capture</span>: {isEnabled(settingsMap.ocr_sidecar, true) ? 'enabled' : 'disabled'}</li>
-                  <li>• <span className="text-slate-100">generated command</span>: <code className="text-xs text-slate-200">{buildOcrCommandPreview(withSettingDefaults(settings))}</code></li>
-                  <li>• The container image bundles the OCR tools (<span className="text-slate-100">ocrmypdf</span>, <span className="text-slate-100">tesseract</span>, usually <span className="text-slate-100">qpdf</span>).</li>
-                </ul>
-              </Panel>
-            </section>
+                <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+                  <Panel title="Recent processing jobs" subtitle="Most recent first, 5 at a time" actions={<div className="rounded-full border border-line px-3 py-2 text-xs uppercase tracking-[0.12em] text-muted">{loading ? 'Refreshing…' : `${jobs.length} loaded`}</div>}>
+                    <div className="grid gap-3">
+                      {jobs.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-6 text-sm text-slate-400">No jobs queued yet.</div> : null}
+                      {pagedJobs.items.map((job) => (
+                        <div key={job.id} className="rounded-xl border border-line bg-[#0d1422] px-4 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="font-medium">#{job.id} · {job.jobType}</div>
+                            <div className="rounded-full border border-line px-2 py-1 text-xs uppercase tracking-[0.12em] text-slate-300">{job.status}</div>
+                          </div>
+                          <div className="mt-2 text-sm text-slate-300">{job.sourcePath}</div>
+                          <div className="mt-1 text-xs text-slate-500">{job.message || '—'} · {new Date(job.createdAt).toLocaleString()}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <Pager currentPage={pagedJobs.currentPage} totalPages={pagedJobs.totalPages} itemCount={jobs.length} pageSize={pageSize} itemLabel="jobs" onPageChange={setJobsPage} />
+                  </Panel>
+
+                  <Panel title="OCR operations snapshot" subtitle="More actionable than the old readiness card">
+                    <ul className="grid gap-3 text-sm text-slate-300">
+                      <li>• <span className="text-slate-100">OCR mode</span>: {settingsMap.ocr_mode || 'internal'}</li>
+                      <li>• <span className="text-slate-100">Documents awaiting OCR work</span>: {ocrSnapshot.pendingOcrDocs}</li>
+                      <li>• <span className="text-slate-100">OCR failures needing attention</span>: {ocrSnapshot.failedOcrDocs}</li>
+                      <li>• <span className="text-slate-100">Documents parked in external OCR mode</span>: {ocrSnapshot.externalModeDocs}</li>
+                      <li>• <span className="text-slate-100">Review-ready documents</span>: {ocrSnapshot.reviewDocs}</li>
+                      <li>• <span className="text-slate-100">Generated OCR command</span>: <code className="text-xs text-slate-200">{buildOcrCommandPreview(withSettingDefaults(settings))}</code></li>
+                    </ul>
+                  </Panel>
+                </section>
+              </>
+            ) : null}
+
+            {activeAdminTab === 'users' ? (
+              <section className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
+                <Panel title="User management" subtitle="Admin-managed users for first-pass MVP" actions={<div className="rounded-full border border-line px-3 py-2 text-xs uppercase tracking-[0.12em] text-muted">{loading ? 'Refreshing…' : 'Admin mode'}</div>}>
+                  <div className="overflow-hidden rounded-2xl border border-line">
+                    <table className="min-w-full divide-y divide-line text-left text-sm">
+                      <thead className="bg-[#0d1422] text-slate-300"><tr><th className="px-4 py-3 font-medium">Username</th><th className="px-4 py-3 font-medium">Role</th><th className="px-4 py-3 font-medium">Status</th><th className="px-4 py-3 font-medium">Last login</th><th className="px-4 py-3 font-medium">Actions</th></tr></thead>
+                      <tbody className="divide-y divide-line bg-panel">
+                        {users.map((user) => (
+                          <tr key={user.id}>
+                            <td className="px-4 py-4"><div className="font-medium text-text">{user.username}</div><div className="text-xs text-slate-400">ID {user.id}</div></td>
+                            <td className="px-4 py-4"><select className="rounded-lg border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} value={user.role} onChange={(event) => void patchUser(user.id, { role: event.target.value as UserRole })}><option value="admin">admin</option><option value="staff">staff</option></select></td>
+                            <td className="px-4 py-4"><label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={user.active} disabled={!isAdmin || user.id === me?.id} onChange={(event) => void patchUser(user.id, { active: event.target.checked })} />active</label>{user.mustChangePassword ? <div className="mt-2 text-xs text-amber-300">must reset password</div> : null}{user.id === me?.id ? <div className="mt-2 text-xs text-slate-500">self-disable blocked</div> : null}</td>
+                            <td className="px-4 py-4 text-slate-300">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never'}</td>
+                            <td className="px-4 py-4"><div className="grid gap-2"><div className="flex gap-2"><input className="min-w-0 flex-1 rounded-lg border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="new password" type="password" value={resetMap[user.id] ?? ''} onChange={(event) => setResetMap((current) => ({ ...current, [user.id]: event.target.value }))} /><button className="rounded-lg border border-line px-3 py-2 text-xs hover:bg-white/5 disabled:opacity-50" disabled={!isAdmin} onClick={() => void resetPassword(user.id)}>Reset</button></div><button className="text-left text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50" disabled={!isAdmin} onClick={() => void patchUser(user.id, { mustChangePassword: !user.mustChangePassword })}>Toggle force password change</button></div></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Panel>
+
+                <Panel title="Create user" subtitle="Admin-only new account flow">
+                  <form className="grid gap-3" onSubmit={createUserSubmit}>
+                    <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="username" value={createForm.username} onChange={(event) => setCreateForm((current) => ({ ...current, username: event.target.value }))} />
+                    <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="temporary password" type="password" value={createForm.password} onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))} />
+                    <select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} value={createForm.role} onChange={(event) => setCreateForm((current) => ({ ...current, role: event.target.value as UserRole }))}><option value="staff">staff</option><option value="admin">admin</option></select>
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={createForm.active} disabled={!isAdmin} onChange={(event) => setCreateForm((current) => ({ ...current, active: event.target.checked }))} />active immediately</label>
+                    <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={!isAdmin} type="submit">Create user</button>
+                  </form>
+                </Panel>
+              </section>
+            ) : null}
+
+            {activeAdminTab === 'settings' ? (
+              <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+                <Panel title="Settings" subtitle="Manage office-level behavior and OCR defaults without exposing container-controlled paths.">
+                  <form className="grid gap-6" onSubmit={saveSettings}>
+                    <div className="rounded-2xl border border-line bg-[#0d1422] p-5">
+                      <div>
+                        <h3 className="text-base font-semibold text-text">Office settings</h3>
+                        <p className="mt-1 text-sm text-slate-300">Only true office-level settings live here; system paths stay container-controlled.</p>
+                      </div>
+
+                      <div className="mt-5 grid gap-4 md:grid-cols-2">
+                        {officeSettings.map((setting) => (
+                          <label className="grid gap-2 text-sm" key={setting.key}>
+                            <span className="text-slate-300">{officeSettingLabels[setting.key as keyof typeof officeSettingLabels] ?? setting.key}</span>
+                            {setting.key === 'auto_create_jobs' ? (
+                              <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDraftValue(setting.key, event.target.value)}>
+                                <option value="true">true</option>
+                                <option value="false">false</option>
+                              </select>
+                            ) : (
+                              <input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDraftValue(setting.key, event.target.value)} />
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-line bg-[#0d1422] p-5">
+                      <div>
+                        <h3 className="text-base font-semibold text-text">OCRmyPDF</h3>
+                        <p className="mt-1 text-sm text-slate-300">These settings shape how new documents are processed by the worker. Input/output paths stay container-controlled.</p>
+                      </div>
+
+                      <div className="mt-5 grid items-start gap-4 md:grid-cols-2">
+                        <label className="grid gap-2 text-sm md:col-span-2">
+                          <span className="text-slate-300">OCR Mode</span>
+                          <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={ocrMode} onChange={(event) => setSettingDraftValue('ocr_mode', event.target.value)}>
+                            <option value="internal">internal</option>
+                            <option value="external">external</option>
+                          </select>
+                          <span className="text-xs text-slate-500">Internal runs OCRmyPDF in the worker. External mode preserves the setting, but automated external handoff/import is still not wired.</span>
+                        </label>
+
+                        <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_deskew, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_deskew', String(event.target.checked))} />--deskew</label>
+                        <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_rotate_pages, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_rotate_pages', String(event.target.checked))} />--rotate-pages</label>
+                        <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={jobsEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_jobs_enabled', String(event.target.checked))} />--jobs</label>
+                        {jobsEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Jobs value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="numeric" value={settingDrafts.ocr_jobs ?? '1'} onChange={(event) => setSettingDraftValue('ocr_jobs', event.target.value)} /></label> : <div className="hidden md:block" />}
+                        <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={sidecarEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_sidecar', String(event.target.checked))} />--sidecar</label>
+                        <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={rotateThresholdEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_rotate_pages_threshold_enabled', String(event.target.checked))} />--rotate-pages-threshold</label>
+                        {rotateThresholdEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Threshold value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="decimal" value={settingDrafts.ocr_rotate_pages_threshold ?? ''} onChange={(event) => setSettingDraftValue('ocr_rotate_pages_threshold', event.target.value)} /></label> : <div className="hidden md:block" />}
+                        <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_clean', String(event.target.checked))} />--clean</label>
+                        <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean_final, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_clean_final', String(event.target.checked))} />--clean-final</label>
+                        <label className="grid gap-2 text-sm md:col-span-2">
+                          <span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Existing text handling</span>
+                          <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} value={ocrTextHandling} onChange={(event) => setSettingDraftValue('ocr_text_handling', event.target.value)}>
+                            <option value="skip-text">skip-text — preserve an existing searchable layer</option>
+                            <option value="redo-ocr">redo-ocr — replace a bad text layer while keeping the page content</option>
+                            <option value="force-ocr">force-ocr — rasterize then OCR everything as a stronger fallback</option>
+                          </select>
+                          <span className="text-xs text-slate-500">Use skip-text for already-searchable scans, redo-ocr when text exists but is misaligned or poor, and force-ocr for the most stubborn files.</span>
+                        </label>
+                      </div>
+
+                      {ocrMode === 'external' ? <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">OCRmyPDF options are disabled while OCR Mode is set to external.</div> : null}
+
+                      <div className="mt-5 rounded-xl border border-line bg-[#09111d] px-4 py-3 text-sm text-slate-300">
+                        <div className="text-xs uppercase tracking-[0.12em] text-muted">Generated command preview</div>
+                        <code className="mt-2 block whitespace-pre-wrap break-all text-xs text-slate-200">{ocrCommandPreview}</code>
+                        <div className="mt-2 text-xs text-slate-500">{sidecarEnabled ? 'When sidecar is enabled, the worker reads OCR text from the temporary sidecar file and cleans it up after processing.' : 'When sidecar is disabled, the worker keeps the PDF output only and does not fabricate extracted text.'}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={!isAdmin} type="submit">Save settings</button>
+                      {successMessage === 'Settings saved.' ? <span className="text-sm text-emerald-300">Saved successfully.</span> : null}
+                    </div>
+                  </form>
+                </Panel>
+
+                <Panel title="System notes" subtitle="Current behavior and why these OCR settings matter">
+                  <ul className="grid gap-3 text-sm text-slate-300">
+                    <li>• Incoming, processed, review, clients, and originals paths are fixed by container/env configuration rather than editable in the UI.</li>
+                    <li>• <span className="text-slate-100">OCR Mode</span> decides whether the worker runs bundled OCRmyPDF now or leaves the document parked for a future external OCR handoff.</li>
+                    <li>• <span className="text-slate-100">deskew</span>, <span className="text-slate-100">rotate-pages</span>, and <span className="text-slate-100">rotate-pages-threshold</span> affect scan cleanup before review, especially for crooked or rotated pages.</li>
+                    <li>• <span className="text-slate-100">jobs</span> controls OCRmyPDF parallelism inside the worker and is mainly a performance tuning lever.</li>
+                    <li>• <span className="text-slate-100">sidecar</span> controls whether the worker captures extracted text for the review screen and downstream automation.</li>
+                    <li>• <span className="text-slate-100">skip-text</span>, <span className="text-slate-100">redo-ocr</span>, and <span className="text-slate-100">force-ocr</span> determine how aggressively OCRmyPDF treats existing text layers.</li>
+                    <li>• If a file stalls, check worker logs first; the UI reflects queue state, but the worker is what discovers watched-folder files and advances processing.</li>
+                  </ul>
+                </Panel>
+              </section>
+            ) : null}
+
+            {activeAdminTab === 'review' ? (
+              <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+                <Panel title="Document queue" subtitle="Select a document to inspect and correct metadata">
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    {(['all', 'intake', 'review', 'filed', 'error'] as const).map((status) => (
+                      <button
+                        key={status}
+                        className={`rounded-xl px-3 py-2 text-xs uppercase tracking-[0.12em] ${documentStatusFilter === status ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`}
+                        onClick={() => setDocumentStatusFilter(status)}
+                      >
+                        {status}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid gap-3">
+                    {pagedDocuments.items.map((document) => (
+                      <button key={document.id} className={`rounded-xl border px-4 py-3 text-left ${selectedDocumentId === document.id ? 'border-accent bg-[#10182c]' : 'border-line bg-[#0d1422]'}`} onClick={() => setSelectedDocumentId(document.id)}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="font-medium">#{document.id} · {document.originalFilename}</div>
+                          <div className="rounded-full border border-line px-2 py-1 text-xs uppercase tracking-[0.12em] text-slate-300">{document.status}</div>
+                        </div>
+                        <div className="mt-2 text-xs text-slate-400">OCR: {document.ocrStatus} · {document.ocrProvider || 'n/a'}</div>
+                        <div className="mt-1 text-sm text-slate-300">{document.currentPath}</div>
+                      </button>
+                    ))}
+                    {filteredDocuments.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No documents in the {documentStatusFilter} queue.</div>
+                    ) : null}
+                  </div>
+                  <Pager currentPage={pagedDocuments.currentPage} totalPages={pagedDocuments.totalPages} itemCount={filteredDocuments.length} pageSize={pageSize} itemLabel="documents" onPageChange={setReviewPage} />
+                </Panel>
+
+                <Panel title="Document review" subtitle="Adjust inferred metadata before filing">
+                  {!selectedDocument ? (
+                    <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">Select a document from the review queue.</div>
+                  ) : (
+                    <form className="grid gap-4" onSubmit={saveReview}>
+                      <div className="grid gap-2 rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-sm text-slate-300">
+                        <div><span className="text-slate-500">Original:</span> {selectedDocument.originalFilename}</div>
+                        <div><span className="text-slate-500">Current:</span> {selectedDocument.currentPath}</div>
+                        <div><span className="text-slate-500">OCR:</span> {selectedDocument.ocrStatus} via {selectedDocument.ocrProvider || 'n/a'}</div>
+                      </div>
+
+                      <div className="rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-sm text-slate-300">
+                        <div className="font-medium text-text">OCR retry tools</div>
+                        <div className="mt-1 text-xs text-slate-500">If highlights land in the wrong place, try redo-ocr first. force-ocr is the more aggressive fallback.</div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button className="rounded-xl border border-line px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/5 disabled:opacity-50" disabled={!isAdmin || rerunBusyMode !== null} onClick={() => { void rerunSelectedDocument('redo-ocr'); }} type="button">{rerunBusyMode === 'redo-ocr' ? 'Queueing redo…' : 'Re-run OCR (redo)'}</button>
+                          <button className="rounded-xl border border-line px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/5 disabled:opacity-50" disabled={!isAdmin || rerunBusyMode !== null} onClick={() => { void rerunSelectedDocument('force-ocr'); }} type="button">{rerunBusyMode === 'force-ocr' ? 'Queueing force…' : 'Re-run OCR (force)'}</button>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <label className="grid gap-2 text-sm"><span className="text-slate-300">Status</span><select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.status} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, status: event.target.value })); }}><option value="review">review</option><option value="filed">filed</option><option value="intake">intake</option><option value="error">error</option></select></label>
+                        <label className="grid gap-2 text-sm"><span className="text-slate-300">Tax year</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.taxYear} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, taxYear: event.target.value })); }} /></label>
+                        <label className="grid gap-2 text-sm"><span className="text-slate-300">Form type</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.formType} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, formType: event.target.value })); }} /></label>
+                        <label className="grid gap-2 text-sm"><span className="text-slate-300">Issuer</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.issuer} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, issuer: event.target.value })); }} /></label>
+                        <label className="grid gap-2 text-sm"><span className="text-slate-300">Client name</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.clientName} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, clientName: event.target.value })); }} /></label>
+                        <label className="grid gap-2 text-sm"><span className="text-slate-300">SSN last4</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.ssnLast4} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, ssnLast4: event.target.value })); }} /></label>
+                      </div>
+
+                      <label className="grid gap-2 text-sm"><span className="text-slate-300">Review notes</span><textarea className="min-h-32 rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.reviewNotes} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, reviewNotes: event.target.value })); }} /></label>
+
+                      <Panel title="Extracted text" subtitle="OCR output or failure context">
+                        <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-xs text-slate-300">{selectedDocument.extractedText || 'No extracted text available yet.'}</pre>
+                      </Panel>
+
+                      <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90" type="submit">Save review changes</button>
+                    </form>
+                  )}
+                </Panel>
+              </section>
+            ) : null}
           </>
         ) : null}
 
-        {activeTab === 'users' ? (
-          <section className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
-            <Panel title="User management" subtitle="Admin-managed users for first-pass MVP" actions={<div className="rounded-full border border-line px-3 py-2 text-xs uppercase tracking-[0.12em] text-muted">{loading ? 'Refreshing…' : isAdmin ? 'Admin mode' : 'Read only'}</div>}>
-              <div className="overflow-hidden rounded-2xl border border-line">
-                <table className="min-w-full divide-y divide-line text-left text-sm">
-                  <thead className="bg-[#0d1422] text-slate-300"><tr><th className="px-4 py-3 font-medium">Username</th><th className="px-4 py-3 font-medium">Role</th><th className="px-4 py-3 font-medium">Status</th><th className="px-4 py-3 font-medium">Last login</th><th className="px-4 py-3 font-medium">Actions</th></tr></thead>
-                  <tbody className="divide-y divide-line bg-panel">
-                    {users.map((user) => (
-                      <tr key={user.id}>
-                        <td className="px-4 py-4"><div className="font-medium text-text">{user.username}</div><div className="text-xs text-slate-400">ID {user.id}</div></td>
-                        <td className="px-4 py-4"><select className="rounded-lg border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} value={user.role} onChange={(event) => void patchUser(user.id, { role: event.target.value as UserRole })}><option value="admin">admin</option><option value="staff">staff</option></select></td>
-                        <td className="px-4 py-4"><label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={user.active} disabled={!isAdmin || user.id === me?.id} onChange={(event) => void patchUser(user.id, { active: event.target.checked })} />active</label>{user.mustChangePassword ? <div className="mt-2 text-xs text-amber-300">must reset password</div> : null}{user.id === me?.id ? <div className="mt-2 text-xs text-slate-500">self-disable blocked</div> : null}</td>
-                        <td className="px-4 py-4 text-slate-300">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never'}</td>
-                        <td className="px-4 py-4"><div className="grid gap-2"><div className="flex gap-2"><input className="min-w-0 flex-1 rounded-lg border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="new password" type="password" value={resetMap[user.id] ?? ''} onChange={(event) => setResetMap((current) => ({ ...current, [user.id]: event.target.value }))} /><button className="rounded-lg border border-line px-3 py-2 text-xs hover:bg-white/5 disabled:opacity-50" disabled={!isAdmin} onClick={() => void resetPassword(user.id)}>Reset</button></div><button className="text-left text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50" disabled={!isAdmin} onClick={() => void patchUser(user.id, { mustChangePassword: !user.mustChangePassword })}>Toggle force password change</button></div></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Panel>
-
-            <Panel title="Create user" subtitle="Admin-only new account flow">
-              <form className="grid gap-3" onSubmit={createUserSubmit}>
-                <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="username" value={createForm.username} onChange={(event) => setCreateForm((current) => ({ ...current, username: event.target.value }))} />
-                <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="temporary password" type="password" value={createForm.password} onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))} />
-                <select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} value={createForm.role} onChange={(event) => setCreateForm((current) => ({ ...current, role: event.target.value as UserRole }))}><option value="staff">staff</option><option value="admin">admin</option></select>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={createForm.active} disabled={!isAdmin} onChange={(event) => setCreateForm((current) => ({ ...current, active: event.target.checked }))} />active immediately</label>
-                <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={!isAdmin} type="submit">Create user</button>
-              </form>
-            </Panel>
-          </section>
-        ) : null}
-
-        {activeTab === 'settings' ? (
-          <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-            <Panel title="Settings" subtitle="Manage office-level behavior and OCR defaults without exposing container-controlled paths.">
-              <form className="grid gap-6" onSubmit={saveSettings}>
-                <div className="rounded-2xl border border-line bg-[#0d1422] p-5">
-                  <div>
-                    <h3 className="text-base font-semibold text-text">Office settings</h3>
-                    <p className="mt-1 text-sm text-slate-300">Only true office-level settings live here; system paths stay container-controlled.</p>
-                  </div>
-
-                  <div className="mt-5 grid gap-4 md:grid-cols-2">
-                    {officeSettings.map((setting) => (
-                      <label className="grid gap-2 text-sm" key={setting.key}>
-                        <span className="text-slate-300">{setting.key}</span>
-                        {setting.key === 'auto_create_jobs' ? (
-                          <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDraftValue(setting.key, event.target.value)}>
-                            <option value="true">true</option>
-                            <option value="false">false</option>
-                          </select>
-                        ) : (
-                          <input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={settingDrafts[setting.key] ?? ''} onChange={(event) => setSettingDraftValue(setting.key, event.target.value)} />
-                        )}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-line bg-[#0d1422] p-5">
-                  <div>
-                    <h3 className="text-base font-semibold text-text">OCRmyPDF</h3>
-                    <p className="mt-1 text-sm text-slate-300">These settings apply to newly processed documents. Input/output paths stay container-controlled.</p>
-                  </div>
-
-                  <div className="mt-5 grid items-start gap-4 md:grid-cols-2">
-                    <label className="grid gap-2 text-sm md:col-span-2">
-                      <span className="text-slate-300">OCR Mode</span>
-                      <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" disabled={!isAdmin} value={ocrMode} onChange={(event) => setSettingDraftValue('ocr_mode', event.target.value)}>
-                        <option value="internal">internal</option>
-                        <option value="external">external</option>
-                      </select>
-                      <span className="text-xs text-slate-500">Internal runs OCRmyPDF in the worker. External mode is saved now, but automatic handoff/import is not fully wired yet.</span>
-                    </label>
-
-                    <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_deskew, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_deskew', String(event.target.checked))} />--deskew</label>
-                    <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_rotate_pages, true)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_rotate_pages', String(event.target.checked))} />--rotate-pages</label>
-                    <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={jobsEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_jobs_enabled', String(event.target.checked))} />--jobs</label>
-                    {jobsEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Jobs value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="numeric" value={settingDrafts.ocr_jobs ?? '1'} onChange={(event) => setSettingDraftValue('ocr_jobs', event.target.value)} /></label> : <div className="hidden md:block" />}
-                    <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={sidecarEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_sidecar', String(event.target.checked))} />--sidecar</label>
-                    <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={rotateThresholdEnabled} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_rotate_pages_threshold_enabled', String(event.target.checked))} />--rotate-pages-threshold</label>
-                    {rotateThresholdEnabled ? <label className="grid gap-2 text-sm"><span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Threshold value</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} inputMode="decimal" value={settingDrafts.ocr_rotate_pages_threshold ?? ''} onChange={(event) => setSettingDraftValue('ocr_rotate_pages_threshold', event.target.value)} /></label> : <div className="hidden md:block" />}
-                    <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_clean', String(event.target.checked))} />--clean</label>
-                    <label className={`inline-flex items-center gap-2 self-start text-sm ${ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}`}><input type="checkbox" checked={isEnabled(settingDrafts.ocr_clean_final, false)} disabled={ocrSettingsDisabled} onChange={(event) => setSettingDraftValue('ocr_clean_final', String(event.target.checked))} />--clean-final</label>
-                    <label className="grid gap-2 text-sm md:col-span-2">
-                      <span className={ocrSettingsDisabled ? 'text-slate-500' : 'text-slate-300'}>Existing text handling</span>
-                      <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2 disabled:text-slate-500" disabled={ocrSettingsDisabled} value={ocrTextHandling} onChange={(event) => setSettingDraftValue('ocr_text_handling', event.target.value)}>
-                        <option value="skip-text">skip-text — preserve existing text layer</option>
-                        <option value="redo-ocr">redo-ocr — replace bad text layer while keeping page content</option>
-                        <option value="force-ocr">force-ocr — rasterize then OCR everything</option>
-                      </select>
-                      <span className="text-xs text-slate-500">skip-text preserves an existing text layer. redo-ocr or force-ocr can help when searchable highlights are misaligned.</span>
-                    </label>
-                  </div>
-
-                  {ocrMode === 'external' ? <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">OCRmyPDF options are disabled while OCR Mode is set to external.</div> : null}
-
-                  <div className="mt-5 rounded-xl border border-line bg-[#09111d] px-4 py-3 text-sm text-slate-300">
-                    <div className="text-xs uppercase tracking-[0.12em] text-muted">Generated command preview</div>
-                    <code className="mt-2 block whitespace-pre-wrap break-all text-xs text-slate-200">{ocrCommandPreview}</code>
-                    <div className="mt-2 text-xs text-slate-500">{sidecarEnabled ? 'When sidecar is enabled, the worker reads extracted text from it and removes the temporary file.' : 'When sidecar is disabled, the worker does not fabricate extracted text.'}</div>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={!isAdmin} type="submit">Save settings</button>
-                  {successMessage === 'Settings saved.' ? <span className="text-sm text-emerald-300">Saved successfully.</span> : null}
-                </div>
-              </form>
-            </Panel>
-
-            <Panel title="System notes" subtitle="Filesystem paths and OCR execution are container-controlled">
-              <ul className="grid gap-3 text-sm text-slate-300">
-                <li>• Incoming, processed, review, clients, and originals paths are fixed by container/env configuration.</li>
-                <li>• Internal OCR settings are applied by the worker when each new job runs.</li>
-                <li>• External OCR mode currently stores intent and keeps the limitation visible instead of pretending folder mapping is done.</li>
-                <li>• If a file stalls in processing, check worker logs for the next OCR or file-write step.</li>
-              </ul>
-            </Panel>
-          </section>
-        ) : null}
-
-        {activeTab === 'intake' ? (
-          <section className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-            <Panel title="Queue intake job" subtitle="Manual job creation while watched-folder automation is still being wired">
-              <form className="grid gap-3" onSubmit={queueIntakeJob}>
-                <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="/data/incoming/client-scan.pdf" value={intakeForm.sourcePath} onChange={(event) => setIntakeForm((current) => ({ ...current, sourcePath: event.target.value }))} />
-                <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="client-scan.pdf" value={intakeForm.originalFilename} onChange={(event) => setIntakeForm((current) => ({ ...current, originalFilename: event.target.value }))} />
-                <textarea className="min-h-32 rounded-xl border border-line bg-[#0d1422] px-3 py-2" disabled={!isAdmin} placeholder="Optional extracted text or notes" value={intakeForm.extractedText} onChange={(event) => setIntakeForm((current) => ({ ...current, extractedText: event.target.value }))} />
-                <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={!isAdmin} type="submit">Queue intake job</button>
-              </form>
-            </Panel>
-
-            <Panel title="First Unraid test milestone" subtitle="What to validate once you install the container there">
-              <ol className="grid gap-3 text-sm text-slate-300 list-decimal pl-5">
-                <li>Set DB host/port/user/password and mounted folders.</li>
-                <li>Confirm the bundled OCR tools are present in the container image.</li>
-                <li>Open the web UI and confirm login works with bootstrap admin.</li>
-                <li>Drop a sample scanned PDF into the watched folder.</li>
-                <li>Verify job appears, worker processes it, and document lands in review.</li>
-              </ol>
-            </Panel>
-          </section>
-        ) : null}
-
-        {activeTab === 'review' ? (
-          <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-            <Panel title="Document queue" subtitle="Select a document to inspect and correct metadata">
-              <div className="mb-4 flex flex-wrap gap-2">
-                {(['all', 'intake', 'review', 'filed', 'error'] as const).map((status) => (
-                  <button
-                    key={status}
-                    className={`rounded-xl px-3 py-2 text-xs uppercase tracking-[0.12em] ${documentStatusFilter === status ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`}
-                    onClick={() => setDocumentStatusFilter(status)}
-                  >
-                    {status}
-                  </button>
-                ))}
-              </div>
-              <div className="grid gap-3">
-                {documents
-                  .filter((document) => documentStatusFilter === 'all' ? true : document.status === documentStatusFilter)
-                  .map((document) => (
-                    <button key={document.id} className={`rounded-xl border px-4 py-3 text-left ${selectedDocumentId === document.id ? 'border-accent bg-[#10182c]' : 'border-line bg-[#0d1422]'}`} onClick={() => setSelectedDocumentId(document.id)}>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="font-medium">#{document.id} · {document.originalFilename}</div>
-                        <div className="rounded-full border border-line px-2 py-1 text-xs uppercase tracking-[0.12em] text-slate-300">{document.status}</div>
-                      </div>
-                      <div className="mt-2 text-xs text-slate-400">OCR: {document.ocrStatus} · {document.ocrProvider || 'n/a'}</div>
-                      <div className="mt-1 text-sm text-slate-300">{document.currentPath}</div>
-                    </button>
-                  ))}
-                {documents.filter((document) => documentStatusFilter === 'all' ? true : document.status === documentStatusFilter).length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No documents in the {documentStatusFilter} queue.</div>
-                ) : null}
-              </div>
-            </Panel>
-
-            <Panel title="Document review" subtitle="Adjust inferred metadata before filing">
-              {!selectedDocument ? (
-                <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">Select a document from the review queue.</div>
-              ) : (
-                <form className="grid gap-4" onSubmit={saveReview}>
-                  <div className="grid gap-2 rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-sm text-slate-300">
-                    <div><span className="text-slate-500">Original:</span> {selectedDocument.originalFilename}</div>
-                    <div><span className="text-slate-500">Current:</span> {selectedDocument.currentPath}</div>
-                    <div><span className="text-slate-500">OCR:</span> {selectedDocument.ocrStatus} via {selectedDocument.ocrProvider || 'n/a'}</div>
-                  </div>
-
-                  <div className="rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-sm text-slate-300">
-                    <div className="font-medium text-text">OCR retry tools</div>
-                    <div className="mt-1 text-xs text-slate-500">If highlights land in the wrong place, try redo-ocr first. force-ocr is the more aggressive fallback.</div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button className="rounded-xl border border-line px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/5 disabled:opacity-50" disabled={!isAdmin || rerunBusyMode !== null} onClick={() => { void rerunSelectedDocument('redo-ocr'); }} type="button">{rerunBusyMode === 'redo-ocr' ? 'Queueing redo…' : 'Re-run OCR (redo)'}</button>
-                      <button className="rounded-xl border border-line px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/5 disabled:opacity-50" disabled={!isAdmin || rerunBusyMode !== null} onClick={() => { void rerunSelectedDocument('force-ocr'); }} type="button">{rerunBusyMode === 'force-ocr' ? 'Queueing force…' : 'Re-run OCR (force)'}</button>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Status</span><select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.status} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, status: event.target.value })); }}><option value="review">review</option><option value="filed">filed</option><option value="intake">intake</option><option value="error">error</option></select></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Tax year</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.taxYear} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, taxYear: event.target.value })); }} /></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Form type</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.formType} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, formType: event.target.value })); }} /></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Issuer</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.issuer} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, issuer: event.target.value })); }} /></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">Client name</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.clientName} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, clientName: event.target.value })); }} /></label>
-                    <label className="grid gap-2 text-sm"><span className="text-slate-300">SSN last4</span><input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.ssnLast4} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, ssnLast4: event.target.value })); }} /></label>
-                  </div>
-
-                  <label className="grid gap-2 text-sm"><span className="text-slate-300">Review notes</span><textarea className="min-h-32 rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={reviewDraft.reviewNotes} onChange={(event) => { setReviewDirty(true); setReviewDraft((current) => ({ ...current, reviewNotes: event.target.value })); }} /></label>
-
-                  <Panel title="Extracted text" subtitle="OCR output or failure context">
-                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-xs text-slate-300">{selectedDocument.extractedText || 'No extracted text available yet.'}</pre>
-                  </Panel>
-
-                  <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90" type="submit">Save review changes</button>
-                </form>
-              )}
-            </Panel>
-          </section>
-        ) : null}
+        {activeSection === 'admin' && !isAdmin ? <AdminAccessNotice /> : null}
+        {activeSection === 'clients' ? <PlaceholderSection title="Clients" description="This area is reserved for client-facing workflow, filing organization, and future client record tools." /> : null}
+        {activeSection === 'tools' ? <PlaceholderSection title="Tools" description="This area is reserved for utilities like 1099-B/TXF helpers, office productivity tools, and future operational shortcuts." /> : null}
       </div>
     </main>
   );
