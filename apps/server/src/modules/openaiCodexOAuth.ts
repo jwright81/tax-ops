@@ -218,7 +218,7 @@ export async function startOpenAiCodexOAuth(providerId: number) {
 
   await new Promise<void>((resolve, reject) => {
     callbackServer!.once('error', reject);
-    callbackServer!.listen(CALLBACK_PORT, '127.0.0.1', () => resolve());
+    callbackServer!.listen(CALLBACK_PORT, () => resolve());
   });
 
   const authUrl =
