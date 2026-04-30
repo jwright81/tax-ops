@@ -84,6 +84,11 @@ async function getAiProviderRowById(providerId: number) {
   }
 }
 
+export async function getAiProviderRawConfig(providerId: number) {
+  const row = await getAiProviderRowById(providerId);
+  return parseJson<Record<string, unknown>>(row?.config_json) ?? {};
+}
+
 export async function createAiProvider(input: {
   kind: AiProviderKind;
   displayName: string;
@@ -211,22 +216,18 @@ export async function probeAiProvider(providerId: number) {
     }
 
     if (provider.kind === 'openai') {
-      const { getOpenAiCodexModelOptions } = await import('./openaiCodexOAuth.js');
-      const row = await getAiProviderRowById(providerId);
-      const rawConfig = parseJson<Record<string, unknown>>(row?.config_json) ?? {};
-      if (!rawConfig.accessToken) {
-        return updateAiProvider(providerId, {
-          status: 'configured',
-          availableModels: getOpenAiCodexModelOptions(),
-          lastError: 'OpenAI Codex OAuth tokens not configured yet.',
-        });
-      }
-
+      const { probeOpenAiCodexOAuth } = await import('./openaiCodexOAuth.js');
+      const probe = await probeOpenAiCodexOAuth(providerId);
       return updateAiProvider(providerId, {
         status: 'connected',
-        availableModels: getOpenAiCodexModelOptions(),
+        availableModels: probe.availableModels,
+        configuredModel: provider.configuredModel ?? probe.model,
         lastError: null,
         lastConnectedAt: new Date().toISOString(),
+        config: {
+          lastProbeModel: probe.model,
+          lastProbeAt: new Date().toISOString(),
+        },
       });
     }
 

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
-import { getAiProviderById, updateAiProvider } from './aiProviders.js';
+import { getAiProviderById, getAiProviderRawConfig, updateAiProvider } from './aiProviders.js';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
@@ -221,10 +221,10 @@ export async function completeOpenAiCodexOAuth(input: { callbackUrl: string; pro
 export async function getValidOpenAiCodexAccessToken(providerId: number) {
   const provider = await getAiProviderById(providerId);
   if (!provider || provider.kind !== 'openai') return null;
-  const config = (provider.config ?? {}) as Record<string, unknown>;
-  const encryptedAccessToken = typeof config.accessToken === 'string' ? config.accessToken : null;
-  const encryptedRefreshToken = typeof config.refreshToken === 'string' ? config.refreshToken : null;
-  const expiresAt = Number(config.expiresAt ?? 0);
+  const config = await getAiProviderRawConfig(providerId);
+  const encryptedAccessToken = typeof config?.accessToken === 'string' ? config.accessToken : null;
+  const encryptedRefreshToken = typeof config?.refreshToken === 'string' ? config.refreshToken : null;
+  const expiresAt = Number(config?.expiresAt ?? 0);
 
   if (!encryptedAccessToken) return null;
 
@@ -259,6 +259,52 @@ export function extractChatGptAccountId(token: string) {
     throw new Error('No chatgpt_account_id in token payload');
   }
   return authClaim.chatgpt_account_id as string;
+}
+
+export async function probeOpenAiCodexOAuth(providerId: number) {
+  const accessToken = await getValidOpenAiCodexAccessToken(providerId);
+  if (!accessToken) {
+    throw new Error('OpenAI Codex OAuth tokens not configured yet.');
+  }
+
+  const accountId = extractChatGptAccountId(accessToken);
+  const preferredModels = [...openAiCodexModels];
+  let lastError = '';
+
+  for (const model of preferredModels) {
+    const response = await fetch('https://chatgpt.com/backend-api/codex/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        'chatgpt-account-id': accountId,
+        'OpenAI-Beta': 'responses=experimental',
+        originator: 'pi',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify({
+        model,
+        store: false,
+        stream: true,
+        instructions: 'Reply with the single word pong.',
+        input: [{ role: 'user', content: 'ping' }],
+      }),
+    });
+
+    if (response.ok) {
+      const raw = await response.text();
+      return {
+        ok: true,
+        model,
+        availableModels: preferredModels,
+        raw,
+      };
+    }
+
+    lastError = `Model ${model}: ${response.status} ${await response.text()}`;
+  }
+
+  throw new Error(lastError || 'OpenAI Codex probe failed');
 }
 
 export async function disconnectOpenAiCodexOAuth(providerId: number) {
