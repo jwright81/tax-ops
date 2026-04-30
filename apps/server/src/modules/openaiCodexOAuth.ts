@@ -6,7 +6,7 @@ const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
 const TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const SCOPE = 'openid profile email offline_access';
-const CALLBACK_PATH = '/api/ai/openai/callback';
+const REDIRECT_URI = 'http://localhost:1455/auth/callback';
 
 const openAiCodexModels = [
   'o4-mini',
@@ -61,30 +61,10 @@ function decryptToken(token: string) {
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }
 
-function getRedirectUri() {
-  const base = env.APP_URL.replace(/\/$/, '');
-  return `${base}${CALLBACK_PATH}`;
-}
-
 function buildSuccessHtml() {
   return `<!DOCTYPE html><html><body style="font-family: sans-serif; padding: 24px;">
     <h2 style="color: green;">Connected to OpenAI</h2>
     <p>You can close this window and return to tax-ops.</p>
-    <script>
-      try { window.opener?.postMessage({ source: 'tax-ops-openai-oauth', status: 'success' }, '*'); } catch {}
-      setTimeout(() => window.close(), 1200)
-    </script>
-  </body></html>`;
-}
-
-function buildErrorHtml(message: string) {
-  const safe = message.replace(/[<>&]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[char] || char));
-  return `<!DOCTYPE html><html><body style="font-family: sans-serif; padding: 24px;">
-    <h2 style="color: red;">Authentication failed</h2>
-    <p>${safe}</p>
-    <script>
-      try { window.opener?.postMessage({ source: 'tax-ops-openai-oauth', status: 'error', message: ${JSON.stringify(message)} }, '*'); } catch {}
-    </script>
   </body></html>`;
 }
 
@@ -97,7 +77,7 @@ async function exchangeCodeForTokens(code: string, codeVerifier: string) {
       client_id: CLIENT_ID,
       code,
       code_verifier: codeVerifier,
-      redirect_uri: getRedirectUri(),
+      redirect_uri: REDIRECT_URI,
     }).toString(),
   });
 
@@ -169,13 +149,12 @@ export async function startOpenAiCodexOAuth(providerId: number) {
     lastError: null,
   });
 
-  const redirectUri = getRedirectUri();
   const authUrl =
     `${AUTHORIZE_URL}?` +
     new URLSearchParams({
       response_type: 'code',
       client_id: CLIENT_ID,
-      redirect_uri: redirectUri,
+      redirect_uri: REDIRECT_URI,
       scope: SCOPE,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
@@ -187,77 +166,56 @@ export async function startOpenAiCodexOAuth(providerId: number) {
 
   return {
     authorizationUrl: authUrl,
-    redirectUri,
+    redirectUri: REDIRECT_URI,
   };
 }
 
-export async function handleOpenAiCodexOAuthCallback(input: { code: string | null; state: string | null }) {
-  const { code, state } = input;
-  if (!state || !code) {
-    return {
-      statusCode: 400,
-      html: buildErrorHtml('Invalid state or missing code.'),
-    };
+export async function completeOpenAiCodexOAuth(input: { callbackUrl: string; providerId: number }) {
+  const provider = await getAiProviderById(input.providerId);
+  if (!provider || provider.kind !== 'openai') {
+    throw new Error('Provider not found');
+  }
+
+  const url = new URL(input.callbackUrl);
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+
+  if (!code || !state) {
+    throw new Error('Callback URL is missing code or state');
   }
 
   pruneExpiredPendingStates();
   const pendingState = pendingStates.get(state);
-  if (!pendingState) {
-    return {
-      statusCode: 400,
-      html: buildErrorHtml('OAuth session expired or was not found. Start the connection flow again.'),
-    };
+  if (!pendingState || pendingState.providerId !== input.providerId) {
+    throw new Error('OAuth session expired or did not match this provider. Start the connection flow again.');
   }
 
   pendingStates.delete(state);
-  const provider = await getAiProviderById(pendingState.providerId);
-  if (!provider || provider.kind !== 'openai') {
-    return {
-      statusCode: 404,
-      html: buildErrorHtml('Provider not found for this OAuth flow.'),
-    };
-  }
 
-  try {
-    const tokenData = await exchangeCodeForTokens(code, pendingState.codeVerifier);
-    const expiresAt = Math.floor(Date.now() / 1000) + (tokenData.expires_in || 3600);
+  const tokenData = await exchangeCodeForTokens(code, pendingState.codeVerifier);
+  const expiresAt = Math.floor(Date.now() / 1000) + (tokenData.expires_in || 3600);
 
-    await updateAiProvider(pendingState.providerId, {
-      status: 'connected',
-      availableModels: getOpenAiCodexModelOptions(),
-      lastError: null,
-      lastConnectedAt: new Date().toISOString(),
-      config: {
-        ...(provider.config ?? {}),
-        oauthPending: false,
-        oauthConfiguredAt: new Date().toISOString(),
-        accessToken: encryptToken(tokenData.access_token),
-        refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
-        expiresAt,
-        baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
-        authMode: 'codex-oauth',
-      },
-    });
+  await updateAiProvider(pendingState.providerId, {
+    status: 'connected',
+    availableModels: getOpenAiCodexModelOptions(),
+    lastError: null,
+    lastConnectedAt: new Date().toISOString(),
+    config: {
+      ...(provider.config ?? {}),
+      oauthPending: false,
+      oauthConfiguredAt: new Date().toISOString(),
+      accessToken: encryptToken(tokenData.access_token),
+      refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
+      expiresAt,
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      authMode: 'codex-oauth',
+    },
+  });
 
-    return {
-      statusCode: 200,
-      html: buildSuccessHtml(),
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'OAuth token exchange failed';
-    await updateAiProvider(pendingState.providerId, {
-      status: 'error',
-      lastError: message,
-      config: {
-        oauthPending: false,
-      },
-    }).catch(() => undefined);
-
-    return {
-      statusCode: 500,
-      html: buildErrorHtml(message),
-    };
-  }
+  return {
+    success: true,
+    redirectUri: REDIRECT_URI,
+  };
 }
 
 export async function getValidOpenAiCodexAccessToken(providerId: number) {

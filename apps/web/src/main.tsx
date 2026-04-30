@@ -418,6 +418,7 @@ function App() {
   const [newProviderDisplayName, setNewProviderDisplayName] = useState('');
   const [providerDrafts, setProviderDrafts] = useState<Record<number, Record<string, string>>>({});
   const [providerModelDrafts, setProviderModelDrafts] = useState<Record<number, string>>({});
+  const [openAiCallbackDrafts, setOpenAiCallbackDrafts] = useState<Record<number, string>>({});
   const [aiRoutingDraft, setAiRoutingDraft] = useState({ defaultProviderId: '', fallbackProviderId: '' });
 
   const isAdmin = me?.role === 'admin';
@@ -546,28 +547,6 @@ function App() {
     if (token) {
       void loadData(token);
     }
-  }, [token]);
-
-  useEffect(() => {
-    function handleOauthMessage(event: MessageEvent) {
-      const data = event.data;
-      if (!data || data.source !== 'tax-ops-openai-oauth') return;
-
-      if (data.status === 'success') {
-        setError(null);
-        setSuccessMessage('OpenAI OAuth connected.');
-        if (token) void loadData(token, { preserveSettingDrafts: true, background: true });
-        return;
-      }
-
-      if (data.status === 'error') {
-        setSuccessMessage(null);
-        setError(data.message || 'OpenAI OAuth failed.');
-      }
-    }
-
-    window.addEventListener('message', handleOauthMessage);
-    return () => window.removeEventListener('message', handleOauthMessage);
   }, [token]);
 
   async function loadDocument(documentId: number, options: { background?: boolean; preserveReviewDraft?: boolean } = {}) {
@@ -796,16 +775,38 @@ function App() {
     setError(null);
     setSuccessMessage(null);
     try {
-      const response = await api<{ authorizationUrl: string }>(`/api/ai/providers/${providerId}/openai-oauth/start`, { method: 'POST' }, token);
+      const response = await api<{ authorizationUrl: string; redirectUri: string }>(`/api/ai/providers/${providerId}/openai-oauth/start`, { method: 'POST' }, token);
       const popup = window.open(response.authorizationUrl, '_blank', 'popup,width=520,height=760');
       if (!popup) {
         setError('Popup blocked. Allow popups for this site and try again.');
         return;
       }
-      setSuccessMessage('OpenAI OAuth started. Finish the login flow in the popup.');
+      setSuccessMessage(`OpenAI OAuth started. After approval, copy the final browser URL from ${response.redirectUri} and paste it below.`);
       await loadData(token, { preserveSettingDrafts: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start OpenAI OAuth');
+    }
+  }
+
+  async function completeOpenAiOAuth(providerId: number) {
+    if (!token) return;
+    const callbackUrl = openAiCallbackDrafts[providerId]?.trim();
+    if (!callbackUrl) {
+      setError('Paste the final localhost callback URL first.');
+      return;
+    }
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await api(`/api/ai/providers/${providerId}/openai-oauth/complete`, {
+        method: 'POST',
+        body: JSON.stringify({ callbackUrl }),
+      }, token);
+      setOpenAiCallbackDrafts((current) => ({ ...current, [providerId]: '' }));
+      await loadData(token, { preserveSettingDrafts: true });
+      setSuccessMessage('OpenAI OAuth connected.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to complete OpenAI OAuth');
     }
   }
 
@@ -1256,6 +1257,23 @@ function App() {
                             ) : null}
                             <span className="text-xs text-slate-500">Configured model: {provider.configuredModel || 'none'}{provider.lastConnectedAt ? ` · connected ${new Date(provider.lastConnectedAt).toLocaleString()}` : ''}</span>
                           </div>
+                          {provider.kind === 'openai' && provider.status !== 'connected' ? (
+                            <div className="mt-4 grid gap-3 rounded-xl border border-line bg-[#09111d] p-4">
+                              <label className="grid gap-2 text-sm">
+                                <span className="text-slate-300">Paste final localhost callback URL</span>
+                                <input
+                                  className="rounded-xl border border-line bg-[#0d1422] px-3 py-2 text-sm"
+                                  placeholder="http://localhost:1455/auth/callback?code=...&state=..."
+                                  value={openAiCallbackDrafts[provider.id] ?? ''}
+                                  onChange={(event) => setOpenAiCallbackDrafts((current) => ({ ...current, [provider.id]: event.target.value }))}
+                                />
+                              </label>
+                              <div className="flex flex-wrap items-center gap-3">
+                                <button className="rounded-xl border border-line px-4 py-2 text-sm hover:bg-white/5" onClick={() => void completeOpenAiOAuth(provider.id)} type="button">Complete OAuth</button>
+                                <span className="text-xs text-slate-500">After OpenAI redirects to localhost and the page fails to load, copy that full URL here.</span>
+                              </div>
+                            </div>
+                          ) : null}
                           {provider.lastError ? <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{provider.lastError}</div> : null}
                         </div>
                       );
