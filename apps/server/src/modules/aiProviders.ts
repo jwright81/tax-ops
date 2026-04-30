@@ -74,6 +74,16 @@ export async function getAiProviderById(providerId: number) {
   }
 }
 
+async function getAiProviderRowById(providerId: number) {
+  const conn = await pool.getConnection();
+  try {
+    const rows = await conn.query('SELECT * FROM ai_providers WHERE id = ? LIMIT 1', [providerId]);
+    return Array.isArray(rows) && rows[0] ? rows[0] : null;
+  } finally {
+    conn.release();
+  }
+}
+
 export async function createAiProvider(input: {
   kind: AiProviderKind;
   displayName: string;
@@ -202,8 +212,9 @@ export async function probeAiProvider(providerId: number) {
 
     if (provider.kind === 'openai') {
       const { getOpenAiCodexModelOptions } = await import('./openaiCodexOAuth.js');
-      const config = provider.config as any;
-      if (!config?.accessToken) {
+      const row = await getAiProviderRowById(providerId);
+      const rawConfig = parseJson<Record<string, unknown>>(row?.config_json) ?? {};
+      if (!rawConfig.accessToken) {
         return updateAiProvider(providerId, {
           status: 'configured',
           availableModels: getOpenAiCodexModelOptions(),

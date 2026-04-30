@@ -804,7 +804,7 @@ function App() {
       }, token);
       setOpenAiCallbackDrafts((current) => ({ ...current, [providerId]: '' }));
       await loadData(token, { preserveSettingDrafts: true });
-      setSuccessMessage('OpenAI OAuth connected.');
+      setSuccessMessage('OpenAI OAuth callback captured and tokens stored. You can now test connection and set a model.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to complete OpenAI OAuth');
     }
