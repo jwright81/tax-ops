@@ -92,6 +92,11 @@ Shared TypeScript types, validation schemas, constants, naming helpers, and util
 ### `docs/`
 Longer-form documentation that should stay out of the root: architecture notes, ADRs, API contracts, workflow specs, and deployment guidance.
 
+Notable current docs include:
+- `docs/architecture/1099B_EXTRACTOR_BLUEPRINT.md` — locked workflow/product blueprint for the first major Tools feature
+- `docs/deployment/UNRAID_FIRST_RUN.md` — first deployment checklist
+- `docs/deployment/OCR_RUNTIME_REQUIREMENTS.md` — OCR runtime requirements
+
 ### `docker/`
 Single-container build assets and local development container helpers.
 

@@ -150,28 +150,45 @@ Move approved documents into structured client/year storage with safe naming and
 ## Phase 5 — 1099-B / TXF Integration
 
 ### Goal
-Integrate brokerage statement processing and produce TXF exports using the existing 1099-B logic as a reusable service/module.
+Ship the **1099-B Extractor** as the first major tool under `Tools`, with page-by-page review, progressive processing, and TXF export based only on user-reviewed data.
+
+### Locked decisions
+- 1099-B Extractor is the first major Tools workflow to build
+- A run can start from either local PDF upload or an already-ingested TaxOps document
+- Existing-document selection should respect admin-managed document naming/types and prioritize docs classified as `1099-B`
+- Users can review finished pages while AI continues processing remaining pages
+- **Reviewed** is page-level user certification that the right-pane data is correct after edits/additions/deletions
+- TXF output must use final edited values from Reviewed pages only
+- Client linkage is optional at first and should not block the initial tool launch
+- The architecture should generalize so future forms mostly swap AI prompt + structured output schema
+- User-provided TXF reference files should be retained as implementation/validation fixtures
 
 ### Milestones
-- Existing Electron app logic audited
-- Reusable parsing/conversion layer extracted
-- 1099-B workflow exposed in tax-ops UI
-- TXF output generated and validated
+- Tool run model defined for upload + existing-document entry paths
+- Dual-pane page review flow implemented
+- Progressive per-page extraction available while run remains active
+- TXF exporter reads Reviewed page data only
+- Shared form-tool scaffold established for future form types
 
 ### Deliverables
-- 1099-B parser module/service
+- 1099-B extractor run schema (runs, pages, page results, exports)
+- Source picker for upload vs existing document
+- Dual-pane review UI with page status and Reviewed controls
+- Summary page + recent runs list
 - Transaction normalization layer
-- TXF exporter
-- Validation/reporting output
-- Broker-specific exception handling notes
+- TXF exporter validated against reference files
+- Architecture doc for future form reuse
 
 ### Dependencies
 - Intake/OCR flow in place
-- Access to existing Electron app source
-- Canonical transaction schema defined
+- Existing document library/query path available
+- Access to existing Electron app logic and user-provided TXF examples
+- Canonical per-page transaction schema defined
 
 ### Exit criteria
-- User can select/upload a 1099-B document and generate a TXF artifact from inside tax-ops
+- User can start a 1099-B run from upload or an existing document
+- User can review completed pages before the entire run finishes
+- TXF output excludes unreviewed pages and reflects final user edits
 
 ---
 
@@ -218,15 +235,17 @@ Make the app reliable, maintainable, and easy to deploy/update in the office.
 
 ## Suggested build order
 
-1. Foundation / Bootstrap
-2. Intake + OCR
-3. Review / Classification
-4. Client Filing
-5. 1099-B / TXF Integration
-6. Hardening / Deployment
+1. Finish OCR pipeline hardening enough for reliable source documents
+2. Build the shared Tool run model and 1099-B Extractor shell
+3. Implement page-level extraction + dual-pane review
+4. Implement TXF export from Reviewed pages only
+5. Add optional client linkage once Clients work exists
+6. Generalize the extractor scaffold for future forms
+7. Hardening / Deployment
 
 ## Progress tracking
 
+### Completed
 - [x] Repo created
 - [x] Initial scaffold folders created
 - [x] Core planning docs created
@@ -238,8 +257,21 @@ Make the app reliable, maintainable, and easy to deploy/update in the office.
 - [x] Watched-folder worker loop + placeholder job processing
 - [x] Review queue + document detail editing UI/API
 - [x] Unraid first-run deployment/test documentation
-- [ ] OCR pipeline
 - [x] Review workflow
-- [ ] Client filing
-- [ ] 1099-B/TXF integration
 - [x] Unraid template
+- [x] 1099-B extractor blueprint / locked decisions documented
+
+### In progress / next
+- [ ] OCR pipeline
+- [ ] Tool run data model for form extractors
+- [ ] 1099-B source picker (upload + existing document)
+- [ ] Progressive page extraction / partial review flow
+- [ ] Dual-pane page review + Reviewed page certification
+- [ ] TXF exporter wired to Reviewed-page final edits only
+- [ ] Recent runs + summary page
+- [ ] Reference TXF fixture validation
+- [ ] Client filing
+
+### Deferred / after initial 1099-B tool
+- [ ] Optional client association inside tool runs
+- [ ] Reusable form-tool scaffold for future forms beyond 1099-B

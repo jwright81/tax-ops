@@ -4,7 +4,7 @@ import './styles.css';
 
 type UserRole = 'admin' | 'staff';
 type AppSection = 'admin' | 'clients' | 'extractor1099b';
-type AdminTab = 'overview' | 'users' | 'settings' | 'review';
+type AdminTab = 'overview' | 'users' | 'settings' | 'aiProviders' | 'review';
 
 interface User {
   id: number;
@@ -55,6 +55,25 @@ interface DocumentItem {
   ocrStatus: string;
   ocrProvider: string | null;
   reviewNotes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+type AiProviderKind = 'openai' | 'lmstudio' | 'ollama';
+
+interface AiProvider {
+  id: number;
+  providerKey: string;
+  kind: AiProviderKind;
+  displayName: string;
+  status: 'unconfigured' | 'configured' | 'connected' | 'error';
+  isDefault: boolean;
+  isFallback: boolean;
+  configuredModel: string | null;
+  lastError: string | null;
+  lastConnectedAt: string | null;
+  availableModels: string[];
+  config: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -379,6 +398,7 @@ function App() {
   const [settings, setSettings] = useState<Setting[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createForm, setCreateForm] = useState({ username: '', password: '', role: 'staff' as UserRole, active: true });
@@ -394,6 +414,11 @@ function App() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [jobsPage, setJobsPage] = useState(1);
   const [reviewPage, setReviewPage] = useState(1);
+  const [newProviderKind, setNewProviderKind] = useState<AiProviderKind>('openai');
+  const [newProviderDisplayName, setNewProviderDisplayName] = useState('');
+  const [providerDrafts, setProviderDrafts] = useState<Record<number, Record<string, string>>>({});
+  const [providerModelDrafts, setProviderModelDrafts] = useState<Record<number, string>>({});
+  const [aiRoutingDraft, setAiRoutingDraft] = useState({ defaultProviderId: '', fallbackProviderId: '' });
 
   const isAdmin = me?.role === 'admin';
   const settingsMap = useMemo(() => Object.fromEntries(settings.map((setting) => [setting.key, setting.value])), [settings]);
@@ -465,19 +490,40 @@ function App() {
       setDocuments(documentsResult.documents);
 
       if (nextMe.role === 'admin') {
-        const [usersResult, settingsResult] = await Promise.all([
+        const [usersResult, settingsResult, aiProvidersResult] = await Promise.all([
           api<{ users: User[] }>('/api/users', {}, activeToken),
           api<{ settings: Setting[] }>('/api/settings', {}, activeToken),
+          api<{ providers: AiProvider[] }>('/api/ai/providers', {}, activeToken),
         ]);
         setUsers(usersResult.users);
         setSettings(settingsResult.settings);
+        setAiProviders(aiProvidersResult.providers);
         if (!options.preserveSettingDrafts) {
           setSettingDrafts(withSettingDefaults(settingsResult.settings));
           setSettingsDirty(false);
         }
+        setAiRoutingDraft({
+          defaultProviderId: String(aiProvidersResult.providers.find((provider) => provider.isDefault)?.id ?? ''),
+          fallbackProviderId: String(aiProvidersResult.providers.find((provider) => provider.isFallback)?.id ?? ''),
+        });
+        setProviderDrafts(
+          Object.fromEntries(
+            aiProvidersResult.providers.map((provider) => [
+              provider.id,
+              {
+                displayName: provider.displayName,
+                baseUrl: String(provider.config?.baseUrl ?? ''),
+              },
+            ]),
+          ),
+        );
+        setProviderModelDrafts(
+          Object.fromEntries(aiProvidersResult.providers.map((provider) => [provider.id, provider.configuredModel ?? ''])),
+        );
       } else {
         setUsers([]);
         setSettings([]);
+        setAiProviders([]);
         setSettingDrafts(withSettingDefaults([]));
         setSettingsDirty(false);
       }
@@ -571,6 +617,7 @@ function App() {
     setMe(null);
     setUsers([]);
     setSettings([]);
+    setAiProviders([]);
     setSettingsDirty(false);
     setReviewDirty(false);
     setProfileMenuOpen(false);
@@ -660,6 +707,132 @@ function App() {
       setSuccessMessage('Settings saved.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save settings');
+    }
+  }
+
+  async function createAiProviderSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const trimmedName = newProviderDisplayName.trim() || (newProviderKind === 'openai' ? 'OpenAI' : newProviderKind === 'lmstudio' ? 'LM Studio' : 'Ollama');
+      const config = newProviderKind === 'lmstudio'
+        ? { baseUrl: 'http://127.0.0.1:1234' }
+        : newProviderKind === 'ollama'
+          ? { baseUrl: 'http://127.0.0.1:11434' }
+          : { baseUrl: 'https://api.openai.com' };
+      await api('/api/ai/providers', {
+        method: 'POST',
+        body: JSON.stringify({ kind: newProviderKind, displayName: trimmedName, config }),
+      }, token);
+      setNewProviderDisplayName('');
+      await loadData(token, { preserveSettingDrafts: true });
+      setSuccessMessage('AI provider added.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add AI provider');
+    }
+  }
+
+  async function saveAiProvider(provider: AiProvider) {
+    if (!token) return;
+    setError(null);
+    setSuccessMessage(null);
+    const draft = providerDrafts[provider.id] ?? {};
+    try {
+      await api(`/api/ai/providers/${provider.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          displayName: draft.displayName || provider.displayName,
+          config: {
+            ...(draft.baseUrl ? { baseUrl: draft.baseUrl } : {}),
+          },
+        }),
+      }, token);
+      await loadData(token, { preserveSettingDrafts: true });
+      setSuccessMessage(`${provider.displayName} settings saved.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save AI provider');
+    }
+  }
+
+  async function testAiProvider(providerId: number) {
+    if (!token) return;
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await api(`/api/ai/providers/${providerId}/test`, { method: 'POST' }, token);
+      await loadData(token, { preserveSettingDrafts: true });
+      setSuccessMessage('Provider connection test completed.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to test AI provider');
+    }
+  }
+
+  async function startOpenAiOAuth(providerId: number) {
+    if (!token) return;
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const response = await api<{ authorizationUrl: string }>(`/api/ai/providers/${providerId}/openai-oauth/start`, { method: 'POST' }, token);
+      window.open(response.authorizationUrl, '_blank', 'noopener,noreferrer');
+      setSuccessMessage('OpenAI OAuth started in a new window. Finish login there, then use Test connection here.');
+      await loadData(token, { preserveSettingDrafts: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start OpenAI OAuth');
+    }
+  }
+
+  async function disconnectOpenAiOAuth(providerId: number) {
+    if (!token) return;
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await api(`/api/ai/providers/${providerId}/openai-oauth/disconnect`, { method: 'POST' }, token);
+      await loadData(token, { preserveSettingDrafts: true });
+      setSuccessMessage('OpenAI OAuth disconnected.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to disconnect OpenAI OAuth');
+    }
+  }
+
+  async function setAiProviderModelSubmit(providerId: number) {
+    if (!token) return;
+    const model = providerModelDrafts[providerId]?.trim();
+    if (!model) {
+      setError('Select a model first');
+      return;
+    }
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await api(`/api/ai/providers/${providerId}/model`, {
+        method: 'POST',
+        body: JSON.stringify({ model }),
+      }, token);
+      await loadData(token, { preserveSettingDrafts: true });
+      setSuccessMessage('Provider model updated.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set provider model');
+    }
+  }
+
+  async function saveAiRouting() {
+    if (!token) return;
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await api('/api/ai/routing', {
+        method: 'PUT',
+        body: JSON.stringify({
+          defaultProviderId: aiRoutingDraft.defaultProviderId ? Number(aiRoutingDraft.defaultProviderId) : null,
+          fallbackProviderId: aiRoutingDraft.fallbackProviderId ? Number(aiRoutingDraft.fallbackProviderId) : null,
+        }),
+      }, token);
+      await loadData(token, { preserveSettingDrafts: true });
+      setSuccessMessage('AI routing saved.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save AI routing');
     }
   }
 
@@ -802,6 +975,7 @@ function App() {
                 ['overview', 'Overview'],
                 ['users', 'Users'],
                 ['settings', 'Settings'],
+                ['aiProviders', 'AI Providers'],
                 ['review', 'Review'],
               ] as [AdminTab, string][]).map(([tab, label]) => (
                 <button key={tab} className={`rounded-xl px-4 py-2 text-sm transition ${activeAdminTab === tab ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`} onClick={() => setActiveAdminTab(tab)}>
@@ -985,6 +1159,127 @@ function App() {
                     <li>• If a file stalls, check worker logs first; the UI reflects queue state, but the worker is what discovers watched-folder files and advances processing.</li>
                   </ul>
                 </Panel>
+              </section>
+            ) : null}
+
+            {activeAdminTab === 'aiProviders' ? (
+              <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+                <Panel title="AI Providers" subtitle="Configure external and local model providers for extractor jobs.">
+                  <div className="grid gap-4">
+                    {aiProviders.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No AI providers configured yet. Add one to begin connecting models.</div>
+                    ) : null}
+
+                    {aiProviders.map((provider) => {
+                      const draft = providerDrafts[provider.id] ?? { displayName: provider.displayName, baseUrl: String(provider.config?.baseUrl ?? '') };
+                      const modelDraft = providerModelDrafts[provider.id] ?? provider.configuredModel ?? '';
+                      const showBaseUrl = provider.kind === 'lmstudio' || provider.kind === 'ollama';
+                      return (
+                        <div key={provider.id} className="rounded-2xl border border-line bg-[#0d1422] p-5">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="text-base font-semibold text-text">{provider.displayName}</div>
+                              <div className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{provider.kind} · {provider.status}</div>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {provider.isDefault ? <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">Default</span> : null}
+                              {provider.isFallback ? <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200">Fallback</span> : null}
+                            </div>
+                          </div>
+
+                          <div className="mt-4 grid gap-4 md:grid-cols-2">
+                            <label className="grid gap-2 text-sm">
+                              <span className="text-slate-300">Display name</span>
+                              <input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" value={draft.displayName} onChange={(event) => setProviderDrafts((current) => ({ ...current, [provider.id]: { ...draft, displayName: event.target.value } }))} />
+                            </label>
+                            {showBaseUrl ? (
+                              <label className="grid gap-2 text-sm">
+                                <span className="text-slate-300">Base URL</span>
+                                <input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" value={draft.baseUrl} onChange={(event) => setProviderDrafts((current) => ({ ...current, [provider.id]: { ...draft, baseUrl: event.target.value } }))} />
+                              </label>
+                            ) : (
+                              <div className="rounded-xl border border-line bg-[#09111d] px-4 py-3 text-sm text-slate-300">
+                                <div className="font-medium text-text">OpenAI Codex OAuth</div>
+                                <div className="mt-1 text-xs text-slate-500">Uses ChatGPT-account OAuth, not API key auth. Start the browser flow below, then test connection and pick a model.</div>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_auto]">
+                            <label className="grid gap-2 text-sm">
+                              <span className="text-slate-300">Model</span>
+                              <select className="rounded-xl border border-line bg-[#09111d] px-3 py-2" value={modelDraft} onChange={(event) => setProviderModelDrafts((current) => ({ ...current, [provider.id]: event.target.value }))}>
+                                <option value="">Select a model</option>
+                                {provider.availableModels.map((model) => (
+                                  <option key={model} value={model}>{model}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <button className="self-end rounded-xl border border-line px-4 py-2 text-sm hover:bg-white/5" onClick={() => void testAiProvider(provider.id)} type="button">Test connection</button>
+                            <button className="self-end rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90" onClick={() => void setAiProviderModelSubmit(provider.id)} type="button">Set model</button>
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap items-center gap-3">
+                            <button className="rounded-xl border border-line px-4 py-2 text-sm hover:bg-white/5" onClick={() => void saveAiProvider(provider)} type="button">Save config</button>
+                            {provider.kind === 'openai' ? (
+                              provider.status === 'connected' ? (
+                                <button className="rounded-xl border border-red-500/30 px-4 py-2 text-sm text-red-200 hover:bg-red-500/10" onClick={() => void disconnectOpenAiOAuth(provider.id)} type="button">Disconnect OAuth</button>
+                              ) : (
+                                <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90" onClick={() => void startOpenAiOAuth(provider.id)} type="button">Connect with ChatGPT</button>
+                              )
+                            ) : null}
+                            <span className="text-xs text-slate-500">Configured model: {provider.configuredModel || 'none'}{provider.lastConnectedAt ? ` · connected ${new Date(provider.lastConnectedAt).toLocaleString()}` : ''}</span>
+                          </div>
+                          {provider.lastError ? <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{provider.lastError}</div> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Panel>
+
+                <div className="grid gap-6">
+                  <Panel title="Add Provider" subtitle="Start with OpenAI, LM Studio, or Ollama.">
+                    <form className="grid gap-3" onSubmit={createAiProviderSubmit}>
+                      <label className="grid gap-2 text-sm">
+                        <span className="text-slate-300">Provider type</span>
+                        <select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={newProviderKind} onChange={(event) => setNewProviderKind(event.target.value as AiProviderKind)}>
+                          <option value="openai">OpenAI</option>
+                          <option value="lmstudio">LM Studio</option>
+                          <option value="ollama">Ollama</option>
+                        </select>
+                      </label>
+                      <label className="grid gap-2 text-sm">
+                        <span className="text-slate-300">Display name</span>
+                        <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" placeholder="Optional, sensible default if blank" value={newProviderDisplayName} onChange={(event) => setNewProviderDisplayName(event.target.value)} />
+                      </label>
+                      <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90" type="submit">Add Provider</button>
+                    </form>
+                  </Panel>
+
+                  <Panel title="Routing" subtitle="Global default and fallback for now, tool-specific overrides later.">
+                    <div className="grid gap-4">
+                      <label className="grid gap-2 text-sm">
+                        <span className="text-slate-300">Default provider</span>
+                        <select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={aiRoutingDraft.defaultProviderId} onChange={(event) => setAiRoutingDraft((current) => ({ ...current, defaultProviderId: event.target.value }))}>
+                          <option value="">None</option>
+                          {aiProviders.map((provider) => (
+                            <option key={provider.id} value={provider.id}>{provider.displayName}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="grid gap-2 text-sm">
+                        <span className="text-slate-300">Fallback provider</span>
+                        <select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={aiRoutingDraft.fallbackProviderId} onChange={(event) => setAiRoutingDraft((current) => ({ ...current, fallbackProviderId: event.target.value }))}>
+                          <option value="">None</option>
+                          {aiProviders.map((provider) => (
+                            <option key={provider.id} value={provider.id}>{provider.displayName}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <button className="rounded-xl border border-line px-4 py-2 text-sm hover:bg-white/5" onClick={() => void saveAiRouting()} type="button">Save routing</button>
+                    </div>
+                  </Panel>
+                </div>
               </section>
             ) : null}
 

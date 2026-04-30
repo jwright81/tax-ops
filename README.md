@@ -84,9 +84,12 @@ The frontend and backend will ship together in one image for simple deployment a
 - Move approved documents into client/year folders
 
 ### 5. 1099-B / TXF tools
-- Reuse the existing 1099-B AI parsing/conversion logic
-- Expose it as a workflow in the web app
-- Generate TXF output for downstream tax software import
+- 1099-B Extractor is the first major tool under Tools
+- Support source selection from local upload or already-ingested TaxOps documents, especially docs classified as 1099-B
+- Let users review completed pages while AI continues processing remaining pages
+- Use page-level Reviewed status as certification that the right-pane data is correct after edits/additions/deletions
+- Generate TXF output from final edited values on Reviewed pages only
+- Reuse the first implementation as the generalized pattern for future form-specific tools
 
 ## User management
 
@@ -165,9 +168,11 @@ Primary production target. The app should run as a single Docker container with 
 - filing workflow and folder placement
 
 ### Phase 5 — 1099-B / TXF integration
-- extract reusable conversion logic from the existing Electron app
-- expose 1099-B processing in the web UI
-- generate TXF output
+- ship the 1099-B Extractor as the first major Tools workflow
+- support upload + existing-document entry paths
+- expose dual-pane page review with progressive processing
+- generate TXF output from Reviewed pages only
+- keep the architecture generalized so later forms mainly swap prompt/schema
 
 ### Phase 6 — Hardening + deployment
 - logging and health checks
@@ -182,6 +187,7 @@ This repository will maintain living docs for planning and implementation:
 - `README.md` — project overview and operating assumptions
 - `PROJECT_STRUCTURE.md` — canonical repo layout and file responsibilities
 - `IMPLEMENTATION_PLAN.md` — phased build plan with progress tracking
+- `docs/architecture/1099B_EXTRACTOR_BLUEPRINT.md` — locked product/architecture blueprint for the first major Tools workflow
 - `docs/deployment/UNRAID_FIRST_RUN.md` — first practical Unraid deployment and validation checklist
 - `docs/deployment/OCR_RUNTIME_REQUIREMENTS.md` — OCR binary/runtime requirements and advanced command override notes for the container-bundled OCR stack
 

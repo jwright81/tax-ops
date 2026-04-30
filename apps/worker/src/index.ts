@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as mariadb from 'mariadb';
@@ -18,6 +19,7 @@ const env = {
   WATCH_FOLDER: process.env.WATCH_FOLDER || '/data/incoming',
   PROCESSED_FOLDER: process.env.PROCESSED_FOLDER || '/data/processed',
   OCR_BINARY: process.env.OCR_BINARY || '/opt/ocrmypdf-venv/bin/ocrmypdf',
+  QPDF_BINARY: process.env.QPDF_BINARY || 'qpdf',
   WATCH_STABLE_MS: Number(process.env.WATCH_STABLE_MS || 8000),
 };
 
@@ -36,6 +38,7 @@ const defaultSettings = {
 } as const;
 
 type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
+type AiProviderKind = 'openai' | 'lmstudio' | 'ollama';
 
 const pool = mariadb.createPool({
   host: env.DB_HOST,
@@ -83,10 +86,55 @@ async function getQueuedJobs(limit = 10) {
   const conn = await pool.getConnection();
   try {
     const rows = await conn.query(
-      `SELECT id, source_path, payload_json FROM processing_jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT ?`,
+      `SELECT id, job_type, source_path, payload_json FROM processing_jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT ?`,
       [limit],
     );
     return Array.isArray(rows) ? rows : [];
+  } finally {
+    conn.release();
+  }
+}
+
+async function getAiProviders() {
+  const conn = await pool.getConnection();
+  try {
+    const rows = await conn.query(
+      `SELECT id, kind, display_name, status, is_default, is_fallback, configured_model, config_json
+       FROM ai_providers
+       ORDER BY is_default DESC, is_fallback DESC, id ASC`,
+    );
+    return Array.isArray(rows) ? rows : [];
+  } finally {
+    conn.release();
+  }
+}
+
+async function getToolRunById(runId: number) {
+  const conn = await pool.getConnection();
+  try {
+    const rows = await conn.query(
+      `SELECT id, tool_type, source_kind, source_document_id, source_filename, source_path, status, page_count, selected_page_range, detected_metadata_json
+       FROM tool_runs
+       WHERE id = ? LIMIT 1`,
+      [runId],
+    );
+    return Array.isArray(rows) && rows[0] ? rows[0] : null;
+  } finally {
+    conn.release();
+  }
+}
+
+async function getToolRunPage(runId: number, pageNumber: number) {
+  const conn = await pool.getConnection();
+  try {
+    const rows = await conn.query(
+      `SELECT id, run_id, page_number, status, review_status, extracted_text
+       FROM tool_run_pages
+       WHERE run_id = ? AND page_number = ?
+       LIMIT 1`,
+      [runId, pageNumber],
+    );
+    return Array.isArray(rows) && rows[0] ? rows[0] : null;
   } finally {
     conn.release();
   }
@@ -177,6 +225,110 @@ async function markDocumentOcr(jobId: number, status: 'processing' | 'completed'
   }
 }
 
+async function updateToolRunStatus(runId: number, status: 'queued' | 'processing' | 'reviewing' | 'completed' | 'failed', detectedMetadata?: Record<string, unknown> | null) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `UPDATE tool_runs
+       SET status = ?, detected_metadata_json = COALESCE(?, detected_metadata_json)
+       WHERE id = ?`,
+      [status, detectedMetadata ? JSON.stringify(detectedMetadata) : null, runId],
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+async function updateToolRunPage(
+  runId: number,
+  pageNumber: number,
+  input: {
+    status: 'queued' | 'processing' | 'ready' | 'reviewed' | 'failed';
+    reviewStatus?: 'pending' | 'reviewed' | 'flagged';
+    extractedText?: string | null;
+    warnings?: string[];
+    errorMessage?: string | null;
+  },
+) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `UPDATE tool_run_pages
+       SET status = ?, review_status = COALESCE(?, review_status), extracted_text = COALESCE(?, extracted_text), warnings_json = ?, error_message = ?
+       WHERE run_id = ? AND page_number = ?`,
+      [
+        input.status,
+        input.reviewStatus ?? null,
+        input.extractedText ?? null,
+        input.warnings ? JSON.stringify(input.warnings) : null,
+        input.errorMessage ?? null,
+        runId,
+        pageNumber,
+      ],
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+async function upsertToolRunPageResult(runPageId: number, result: { result: Record<string, unknown>; normalizedRows: Record<string, unknown>[]; audit: Record<string, unknown>; }) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `INSERT INTO tool_run_page_results (run_page_id, result_json, normalized_rows_json, audit_json)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         result_json = VALUES(result_json),
+         normalized_rows_json = VALUES(normalized_rows_json),
+         audit_json = VALUES(audit_json)`,
+      [runPageId, JSON.stringify(result.result), JSON.stringify(result.normalizedRows), JSON.stringify(result.audit)],
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+async function refreshToolRunAggregateStatus(runId: number) {
+  const conn = await pool.getConnection();
+  try {
+    const rows = await conn.query(
+      `SELECT
+         COUNT(*) AS total_count,
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+         SUM(CASE WHEN status = 'reviewed' THEN 1 ELSE 0 END) AS reviewed_count,
+         SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready_count,
+         SUM(CASE WHEN status IN ('queued', 'processing') THEN 1 ELSE 0 END) AS pending_count
+       FROM tool_run_pages
+       WHERE run_id = ?`,
+      [runId],
+    );
+
+    const stats = Array.isArray(rows) && rows[0] ? rows[0] : null;
+    if (!stats) return;
+
+    const totalCount = Number(stats.total_count ?? 0);
+    const failedCount = Number(stats.failed_count ?? 0);
+    const reviewedCount = Number(stats.reviewed_count ?? 0);
+    const readyCount = Number(stats.ready_count ?? 0);
+    const pendingCount = Number(stats.pending_count ?? 0);
+
+    let status: 'queued' | 'processing' | 'reviewing' | 'completed' | 'failed' = 'processing';
+    if (totalCount > 0 && failedCount === totalCount) {
+      status = 'failed';
+    } else if (pendingCount > 0) {
+      status = readyCount > 0 || reviewedCount > 0 ? 'reviewing' : 'processing';
+    } else if (readyCount > 0 || reviewedCount > 0) {
+      status = 'reviewing';
+    } else {
+      status = 'completed';
+    }
+
+    await conn.query('UPDATE tool_runs SET status = ? WHERE id = ?', [status, runId]);
+  } finally {
+    conn.release();
+  }
+}
+
 function inferMetadata(fileName: string) {
   const base = fileName.replace(/\.pdf$/i, '');
   const parts = base.split(/[_-]+/).filter(Boolean);
@@ -255,6 +407,12 @@ function buildInternalOcrCommand(
 
   args.push(sourcePath, outputPath);
   return args.map(shellQuote).join(' ');
+}
+
+async function extractPdfPage(sourcePath: string, outputPath: string, pageNumber: number) {
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await execFileAsync(env.QPDF_BINARY, [sourcePath, '--pages', sourcePath, String(pageNumber), '--', outputPath]);
+  return outputPath;
 }
 
 async function runInternalOcrPass(
@@ -339,6 +497,326 @@ async function runOcrStep(sourcePath: string, fileName: string, settings: Record
   };
 }
 
+function parseJson<T>(value: unknown): T | null {
+  if (!value || typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function decryptOpenAiToken(token: string) {
+  const raw = Buffer.from(token, 'base64');
+  const iv = raw.subarray(0, 12);
+  const tag = raw.subarray(12, 28);
+  const encrypted = raw.subarray(28);
+  const key = crypto.createHash('sha256').update(process.env.SESSION_SECRET || '').digest();
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+}
+
+async function resolveAiProviderChain() {
+  const providers = await getAiProviders();
+  const defaultProvider = providers.find((provider) => Boolean(provider.is_default));
+  const fallbackProvider = providers.find((provider) => Boolean(provider.is_fallback) && provider.id !== defaultProvider?.id);
+  return [defaultProvider, fallbackProvider].filter(Boolean) as any[];
+}
+
+function build1099BExtractionPrompt(run: any, pageNumber: number, extractedText: string) {
+  return {
+    system: `You extract structured 1099-B page data for tax preparation. Return JSON only. If no transactions are present, return an empty transactions array and include warnings.`,
+    user: JSON.stringify({
+      task: 'Extract all visible 1099-B transaction rows and page-level metadata from this single page.',
+      constraints: [
+        'Return valid JSON only.',
+        'Include broker, accountLabel, taxYear when visible.',
+        'Use null for unknown scalar values.',
+        'transactions must be an array of structured objects.',
+        'Include warnings array for uncertainty or ambiguous OCR.',
+      ],
+      pageNumber,
+      sourceFilename: run.source_filename,
+      extractedText,
+    }),
+  };
+}
+
+function normalize1099BModelResponse(pageNumber: number, payload: any) {
+  const transactions = Array.isArray(payload?.transactions) ? payload.transactions : [];
+  return {
+    result: {
+      pageNumber,
+      extractedAt: new Date().toISOString(),
+      detectedForm: payload?.detectedForm || '1099-B',
+      broker: payload?.broker ?? null,
+      accountLabel: payload?.accountLabel ?? null,
+      taxYear: payload?.taxYear ?? null,
+      transactionCountEstimate: transactions.length,
+      warnings: Array.isArray(payload?.warnings) ? payload.warnings : [],
+    },
+    normalizedRows: transactions.map((row: any, index: number) => ({
+      rowType: 'transaction',
+      rowIndex: index,
+      pageNumber,
+      symbol: row?.symbol ?? null,
+      description: row?.description ?? null,
+      proceeds: row?.proceeds ?? null,
+      costBasis: row?.costBasis ?? null,
+      dateAcquired: row?.dateAcquired ?? null,
+      dateSold: row?.dateSold ?? null,
+      washSaleDisallowed: row?.washSaleDisallowed ?? null,
+      gainOrLoss: row?.gainOrLoss ?? null,
+      term: row?.term ?? null,
+    })),
+    warnings: Array.isArray(payload?.warnings) ? payload.warnings : [],
+  };
+}
+
+async function callLmStudio(baseUrl: string, model: string, systemPrompt: string, userPrompt: string) {
+  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  });
+  if (!response.ok) throw new Error(`LM Studio error (${response.status}): ${await response.text()}`);
+  const payload = await response.json();
+  return payload?.choices?.[0]?.message?.content ?? '{}';
+}
+
+async function callOllama(baseUrl: string, model: string, systemPrompt: string, userPrompt: string) {
+  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      stream: false,
+      format: 'json',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  });
+  if (!response.ok) throw new Error(`Ollama error (${response.status}): ${await response.text()}`);
+  const payload = await response.json();
+  return payload?.message?.content ?? '{}';
+}
+
+async function callOpenAiCodex(provider: any, model: string, systemPrompt: string, userPrompt: string) {
+  const config = parseJson<Record<string, unknown>>(provider.config_json) ?? {};
+  const encryptedAccessToken = typeof config.accessToken === 'string' ? config.accessToken : null;
+  if (!encryptedAccessToken) throw new Error('OpenAI Codex OAuth token missing');
+  const accessToken = await decryptOpenAiToken(encryptedAccessToken);
+  const jwtParts = accessToken.split('.');
+  if (jwtParts.length < 2) throw new Error('Invalid OpenAI Codex JWT');
+  const jwtPayload = JSON.parse(Buffer.from(jwtParts[1], 'base64').toString('utf8'));
+  const accountId = jwtPayload?.['https://api.openai.com/auth']?.chatgpt_account_id;
+  if (!accountId) throw new Error('chatgpt_account_id missing from OpenAI Codex token');
+
+  const response = await fetch('https://chatgpt.com/backend-api/codex/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'chatgpt-account-id': accountId,
+      'OpenAI-Beta': 'responses=experimental',
+      originator: 'pi',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({
+      model,
+      store: false,
+      stream: true,
+      instructions: systemPrompt,
+      input: [{ role: 'user', content: userPrompt }],
+      text: { format: { type: 'json_object' } },
+    }),
+  });
+  if (!response.ok) throw new Error(`OpenAI Codex error (${response.status}): ${await response.text()}`);
+  const raw = await response.text();
+  let content = '';
+  for (const line of raw.split('\n')) {
+    if (!line.startsWith('data:')) continue;
+    const data = line.slice(5).trim();
+    if (data === '[DONE]') break;
+    try {
+      const event = JSON.parse(data);
+      if (event.type === 'response.output_text.delta' && event.delta) content += event.delta;
+      if (!content && (event.type === 'response.completed' || event.type === 'response.done')) {
+        const output = event.response?.output || [];
+        for (const item of output) {
+          if (item.type === 'message' && Array.isArray(item.content)) {
+            for (const part of item.content) {
+              if (part.type === 'output_text' && part.text) content += part.text;
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore malformed lines
+    }
+  }
+  return content || '{}';
+}
+
+async function extract1099BViaAi(run: any, pageNumber: number, extractedText: string) {
+  const providerChain = await resolveAiProviderChain();
+  if (providerChain.length === 0) {
+    throw new Error('No AI providers configured. Add and configure a default provider first.');
+  }
+
+  const prompt = build1099BExtractionPrompt(run, pageNumber, extractedText);
+  const errors: string[] = [];
+
+  for (const provider of providerChain) {
+    const model = provider.configured_model;
+    if (!model) {
+      errors.push(`${provider.display_name}: no model configured`);
+      continue;
+    }
+
+    const config = parseJson<Record<string, unknown>>(provider.config_json) ?? {};
+    try {
+      let raw = '{}';
+      if (provider.kind === 'lmstudio') {
+        const baseUrl = String(config.baseUrl || 'http://127.0.0.1:1234');
+        raw = await callLmStudio(baseUrl, model, prompt.system, prompt.user);
+      } else if (provider.kind === 'ollama') {
+        const baseUrl = String(config.baseUrl || 'http://127.0.0.1:11434');
+        raw = await callOllama(baseUrl, model, prompt.system, prompt.user);
+      } else if (provider.kind === 'openai') {
+        raw = await callOpenAiCodex(provider, model, prompt.system, prompt.user);
+      }
+
+      const parsed = JSON.parse(raw);
+      const normalized = normalize1099BModelResponse(pageNumber, parsed);
+      return {
+        providerLabel: `${provider.kind}:${model}`,
+        ...normalized,
+        audit: {
+          processor: 'worker.ai_1099b_extract',
+          providerKind: provider.kind as AiProviderKind,
+          providerId: provider.id,
+          providerName: provider.display_name,
+          model,
+          note: 'AI-backed structured extraction',
+        },
+      };
+    } catch (error) {
+      errors.push(`${provider.display_name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  throw new Error(`All configured AI providers failed: ${errors.join(' | ')}`);
+}
+
+function build1099BDetectedMetadata(run: any, pageNumber: number) {
+  const taxYearMatch = String(run.source_filename || '').match(/20\d{2}/);
+  return {
+    sourceFilename: run.source_filename,
+    sourceKind: run.source_kind,
+    taxYear: taxYearMatch?.[0] ?? null,
+    pageNumber,
+    broker: 'Pending broker detection',
+    accountLabel: null,
+  };
+}
+
+async function process1099BExtractPageJob(job: any, settings: Record<string, string>) {
+  const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
+  const runId = Number(payload.runId);
+  const pageNumber = Number(payload.pageNumber);
+
+  if (!Number.isFinite(runId) || !Number.isFinite(pageNumber)) {
+    throw new Error('1099-B page job missing runId or pageNumber');
+  }
+
+  const run = await getToolRunById(runId);
+  if (!run) {
+    throw new Error(`Tool run ${runId} not found`);
+  }
+
+  const runPage = await getToolRunPage(runId, pageNumber);
+  if (!runPage) {
+    throw new Error(`Tool run page ${pageNumber} not found for run ${runId}`);
+  }
+
+  await updateToolRunStatus(runId, 'processing', build1099BDetectedMetadata(run, pageNumber));
+  await updateToolRunPage(runId, pageNumber, { status: 'processing', reviewStatus: 'pending', errorMessage: null });
+
+  const pagesRoot = path.join(env.PROCESSED_FOLDER, 'tool-runs', String(runId), 'pages');
+  const pagePdfPath = path.join(pagesRoot, `page-${String(pageNumber).padStart(4, '0')}.pdf`);
+  const pageFileName = `${path.parse(run.source_filename).name}.page-${pageNumber}.pdf`;
+
+  await extractPdfPage(run.source_path, pagePdfPath, pageNumber);
+  const ocr = await runOcrStep(pagePdfPath, pageFileName, settings, payload);
+  const aiResult = await extract1099BViaAi(run, pageNumber, ocr.extractedText);
+
+  await updateToolRunPage(runId, pageNumber, {
+    status: 'ready',
+    reviewStatus: 'pending',
+    extractedText: ocr.extractedText,
+    warnings: aiResult.warnings,
+    errorMessage: null,
+  });
+  await upsertToolRunPageResult(runPage.id, {
+    result: {
+      ...aiResult.result,
+      sourceFilename: run.source_filename,
+      textPreview: ocr.extractedText.slice(0, 500),
+      pagePdfPath,
+    },
+    normalizedRows: aiResult.normalizedRows,
+    audit: {
+      ...aiResult.audit,
+      pagePdfPath,
+      ocrProvider: ocr.provider,
+      ocrNotes: ocr.notes,
+      aiProvider: aiResult.providerLabel,
+    },
+  });
+  await refreshToolRunAggregateStatus(runId);
+
+  await updateJobStatus(job.id, 'completed', `1099-B page ${pageNumber} extracted`, {
+    runId,
+    pageNumber,
+    pagePdfPath,
+    ocrProvider: ocr.provider,
+    aiProvider: aiResult.providerLabel,
+    warnings: aiResult.warnings,
+  });
+  console.log(`[worker] completed 1099-B page job #${job.id} (run ${runId} page ${pageNumber})`);
+}
+
+async function fail1099BExtractPageJob(job: any, error: unknown) {
+  const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
+  const runId = Number(payload.runId);
+  const pageNumber = Number(payload.pageNumber);
+
+  if (Number.isFinite(runId) && Number.isFinite(pageNumber)) {
+    await updateToolRunPage(runId, pageNumber, {
+      status: 'failed',
+      reviewStatus: 'flagged',
+      errorMessage: String(error),
+      warnings: ['Page extraction failed.'],
+    }).catch(() => undefined);
+    await refreshToolRunAggregateStatus(runId).catch(() => undefined);
+  }
+
+  await updateJobStatus(job.id, 'failed', `1099-B page extraction error: ${String(error)}`);
+  console.error(`[worker] failed 1099-B page job #${job.id}`, error);
+}
+
 async function scanWatchFolder() {
   try {
     const entries = await fs.readdir(env.WATCH_FOLDER, { withFileTypes: true });
@@ -360,8 +838,19 @@ async function scanWatchFolder() {
 async function processQueuedJobs() {
   const jobs = await getQueuedJobs(5);
   for (const job of jobs) {
+    const settings = await getSettingsMap();
+
+    if (job.job_type === 'tool.1099b.extract_page') {
+      try {
+        await updateJobStatus(job.id, 'processing', 'Worker picked up 1099-B page extraction job');
+        await process1099BExtractPageJob(job, settings);
+      } catch (error) {
+        await fail1099BExtractPageJob(job, error);
+      }
+      continue;
+    }
+
     try {
-      const settings = await getSettingsMap();
       const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
       const textHandling = resolveOcrTextHandling(settings, payload.ocrTextHandlingOverride);
       const provider = settings.ocr_mode === 'external' ? 'external:pending' : 'container:ocrmypdf';
@@ -383,7 +872,6 @@ async function processQueuedJobs() {
       console.log(`[worker] completed job #${job.id} (${originalFilename})`);
     } catch (error) {
       const payload = job.payload_json ? JSON.parse(job.payload_json) : {};
-      const settings = await getSettingsMap();
       const textHandling = resolveOcrTextHandling(settings, payload.ocrTextHandlingOverride);
       await markDocumentOcr(job.id, 'failed', `container:ocrmypdf:${textHandling}`);
       await updateDocument(job.id, {
