@@ -7,7 +7,7 @@ import { authenticate } from '../auth/login.js';
 import { type AuthenticatedRequest, requireAdmin, requireAuth } from '../auth/requireAuth.js';
 import { pool } from '../db/pool.js';
 import { createAiProvider, listAiProviders, probeAiProvider, setAiProviderModel, setAiRouting, updateAiProvider } from '../modules/aiProviders.js';
-import { disconnectOpenAiCodexOAuth, startOpenAiCodexOAuth } from '../modules/openaiCodexOAuth.js';
+import { disconnectOpenAiCodexOAuth, handleOpenAiCodexOAuthCallback, startOpenAiCodexOAuth } from '../modules/openaiCodexOAuth.js';
 import { createDocument, createJob, getDocumentById, listDocuments, listJobs, queueDocumentOcrRerun, updateDocumentReview } from '../modules/jobs.js';
 import { listSettings, upsertSettings } from '../modules/settings.js';
 import { build1099BRunDetail, create1099BRun, listToolRuns } from '../modules/toolRuns.js';
@@ -332,6 +332,13 @@ export function createApp() {
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to start OpenAI OAuth flow' });
     }
+  });
+
+  app.get('/api/ai/openai/callback', async (req, res) => {
+    const code = typeof req.query.code === 'string' ? req.query.code : null;
+    const state = typeof req.query.state === 'string' ? req.query.state : null;
+    const result = await handleOpenAiCodexOAuthCallback({ code, state });
+    res.status(result.statusCode).type('html').send(result.html);
   });
 
   app.post('/api/ai/providers/:id/openai-oauth/disconnect', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {

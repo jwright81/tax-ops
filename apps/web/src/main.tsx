@@ -548,6 +548,28 @@ function App() {
     }
   }, [token]);
 
+  useEffect(() => {
+    function handleOauthMessage(event: MessageEvent) {
+      const data = event.data;
+      if (!data || data.source !== 'tax-ops-openai-oauth') return;
+
+      if (data.status === 'success') {
+        setError(null);
+        setSuccessMessage('OpenAI OAuth connected.');
+        if (token) void loadData(token, { preserveSettingDrafts: true, background: true });
+        return;
+      }
+
+      if (data.status === 'error') {
+        setSuccessMessage(null);
+        setError(data.message || 'OpenAI OAuth failed.');
+      }
+    }
+
+    window.addEventListener('message', handleOauthMessage);
+    return () => window.removeEventListener('message', handleOauthMessage);
+  }, [token]);
+
   async function loadDocument(documentId: number, options: { background?: boolean; preserveReviewDraft?: boolean } = {}) {
     if (!token) return;
     try {
@@ -775,8 +797,12 @@ function App() {
     setSuccessMessage(null);
     try {
       const response = await api<{ authorizationUrl: string }>(`/api/ai/providers/${providerId}/openai-oauth/start`, { method: 'POST' }, token);
-      window.open(response.authorizationUrl, '_blank', 'noopener,noreferrer');
-      setSuccessMessage('OpenAI OAuth started in a new window. Finish login there, then use Test connection here.');
+      const popup = window.open(response.authorizationUrl, '_blank', 'popup,width=520,height=760');
+      if (!popup) {
+        setError('Popup blocked. Allow popups for this site and try again.');
+        return;
+      }
+      setSuccessMessage('OpenAI OAuth started. Finish the login flow in the popup.');
       await loadData(token, { preserveSettingDrafts: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start OpenAI OAuth');

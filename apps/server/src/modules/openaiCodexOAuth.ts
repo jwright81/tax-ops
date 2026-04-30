@@ -1,15 +1,12 @@
 import crypto from 'node:crypto';
-import http from 'node:http';
-import { URL } from 'node:url';
 import { env } from '../config/env.js';
 import { getAiProviderById, updateAiProvider } from './aiProviders.js';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
 const TOKEN_URL = 'https://auth.openai.com/oauth/token';
-const CALLBACK_PORT = 1455;
-const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}/auth/callback`;
 const SCOPE = 'openid profile email offline_access';
+const CALLBACK_PATH = '/api/ai/openai/callback';
 
 const openAiCodexModels = [
   'o4-mini',
@@ -30,8 +27,7 @@ type PendingState = {
   createdAt: number;
 };
 
-let callbackServer: http.Server | null = null;
-let pendingState: PendingState | null = null;
+const pendingStates = new Map<string, PendingState>();
 
 function base64UrlEncode(buffer: Buffer) {
   return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -65,6 +61,33 @@ function decryptToken(token: string) {
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }
 
+function getRedirectUri() {
+  const base = env.APP_URL.replace(/\/$/, '');
+  return `${base}${CALLBACK_PATH}`;
+}
+
+function buildSuccessHtml() {
+  return `<!DOCTYPE html><html><body style="font-family: sans-serif; padding: 24px;">
+    <h2 style="color: green;">Connected to OpenAI</h2>
+    <p>You can close this window and return to tax-ops.</p>
+    <script>
+      try { window.opener?.postMessage({ source: 'tax-ops-openai-oauth', status: 'success' }, '*'); } catch {}
+      setTimeout(() => window.close(), 1200)
+    </script>
+  </body></html>`;
+}
+
+function buildErrorHtml(message: string) {
+  const safe = message.replace(/[<>&]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[char] || char));
+  return `<!DOCTYPE html><html><body style="font-family: sans-serif; padding: 24px;">
+    <h2 style="color: red;">Authentication failed</h2>
+    <p>${safe}</p>
+    <script>
+      try { window.opener?.postMessage({ source: 'tax-ops-openai-oauth', status: 'error', message: ${JSON.stringify(message)} }, '*'); } catch {}
+    </script>
+  </body></html>`;
+}
+
 async function exchangeCodeForTokens(code: string, codeVerifier: string) {
   const response = await fetch(TOKEN_URL, {
     method: 'POST',
@@ -74,7 +97,7 @@ async function exchangeCodeForTokens(code: string, codeVerifier: string) {
       client_id: CLIENT_ID,
       code,
       code_verifier: codeVerifier,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: getRedirectUri(),
     }).toString(),
   });
 
@@ -111,6 +134,13 @@ async function refreshAccessToken(refreshToken: string) {
   };
 }
 
+function pruneExpiredPendingStates() {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [state, pending] of pendingStates.entries()) {
+    if (pending.createdAt < cutoff) pendingStates.delete(state);
+  }
+}
+
 export function getOpenAiCodexModelOptions() {
   return [...openAiCodexModels];
 }
@@ -120,20 +150,12 @@ export async function startOpenAiCodexOAuth(providerId: number) {
   if (!provider) throw new Error('Provider not found');
   if (provider.kind !== 'openai') throw new Error('Provider is not OpenAI');
 
-  if (callbackServer) {
-    try {
-      callbackServer.close();
-    } catch {
-      // ignore
-    }
-    callbackServer = null;
-    pendingState = null;
-  }
+  pruneExpiredPendingStates();
 
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = crypto.randomBytes(16).toString('hex');
-  pendingState = { providerId, codeVerifier, state, createdAt: Date.now() };
+  pendingStates.set(state, { providerId, codeVerifier, state, createdAt: Date.now() });
 
   await updateAiProvider(providerId, {
     status: 'configured',
@@ -147,86 +169,13 @@ export async function startOpenAiCodexOAuth(providerId: number) {
     lastError: null,
   });
 
-  callbackServer = http.createServer(async (req, res) => {
-    const reqUrl = new URL(req.url || '/', REDIRECT_URI);
-    if (reqUrl.pathname !== '/auth/callback') {
-      res.writeHead(404);
-      res.end('Not found');
-      return;
-    }
-
-    const code = reqUrl.searchParams.get('code');
-    const receivedState = reqUrl.searchParams.get('state');
-
-    if (!pendingState || receivedState !== pendingState.state || !code) {
-      res.writeHead(400, { 'Content-Type': 'text/html' });
-      res.end('<html><body><h2>Authentication failed</h2><p>Invalid state or missing code.</p></body></html>');
-      return;
-    }
-
-    try {
-      const tokenData = await exchangeCodeForTokens(code, pendingState.codeVerifier);
-      const expiresAt = Math.floor(Date.now() / 1000) + (tokenData.expires_in || 3600);
-
-      await updateAiProvider(pendingState.providerId, {
-        status: 'connected',
-        availableModels: getOpenAiCodexModelOptions(),
-        lastError: null,
-        lastConnectedAt: new Date().toISOString(),
-        config: {
-          ...(provider.config ?? {}),
-          oauthPending: false,
-          oauthConfiguredAt: new Date().toISOString(),
-          accessToken: encryptToken(tokenData.access_token),
-          refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
-          expiresAt,
-          baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
-          authMode: 'codex-oauth',
-        },
-      });
-
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(`<!DOCTYPE html><html><body>
-        <h2 style="color: green; font-family: sans-serif;">Connected to OpenAI</h2>
-        <p style="font-family: sans-serif;">You can close this window and return to tax-ops.</p>
-        <script>setTimeout(() => window.close(), 1500)</script>
-      </body></html>`);
-    } catch (error) {
-      await updateAiProvider(pendingState.providerId, {
-        status: 'error',
-        lastError: error instanceof Error ? error.message : 'OAuth token exchange failed',
-      }).catch(() => undefined);
-      res.writeHead(500, { 'Content-Type': 'text/html' });
-      res.end(`<!DOCTYPE html><html><body>
-        <h2 style="color: red; font-family: sans-serif;">Authentication failed</h2>
-        <p style="font-family: sans-serif;">${error instanceof Error ? error.message : 'Unknown error'}</p>
-      </body></html>`);
-    } finally {
-      pendingState = null;
-      setTimeout(() => {
-        if (callbackServer) {
-          try {
-            callbackServer.close();
-          } catch {
-            // ignore
-          }
-          callbackServer = null;
-        }
-      }, 1000);
-    }
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    callbackServer!.once('error', reject);
-    callbackServer!.listen(CALLBACK_PORT, () => resolve());
-  });
-
+  const redirectUri = getRedirectUri();
   const authUrl =
     `${AUTHORIZE_URL}?` +
     new URLSearchParams({
       response_type: 'code',
       client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: redirectUri,
       scope: SCOPE,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
@@ -238,9 +187,77 @@ export async function startOpenAiCodexOAuth(providerId: number) {
 
   return {
     authorizationUrl: authUrl,
-    redirectUri: REDIRECT_URI,
-    callbackPort: CALLBACK_PORT,
+    redirectUri,
   };
+}
+
+export async function handleOpenAiCodexOAuthCallback(input: { code: string | null; state: string | null }) {
+  const { code, state } = input;
+  if (!state || !code) {
+    return {
+      statusCode: 400,
+      html: buildErrorHtml('Invalid state or missing code.'),
+    };
+  }
+
+  pruneExpiredPendingStates();
+  const pendingState = pendingStates.get(state);
+  if (!pendingState) {
+    return {
+      statusCode: 400,
+      html: buildErrorHtml('OAuth session expired or was not found. Start the connection flow again.'),
+    };
+  }
+
+  pendingStates.delete(state);
+  const provider = await getAiProviderById(pendingState.providerId);
+  if (!provider || provider.kind !== 'openai') {
+    return {
+      statusCode: 404,
+      html: buildErrorHtml('Provider not found for this OAuth flow.'),
+    };
+  }
+
+  try {
+    const tokenData = await exchangeCodeForTokens(code, pendingState.codeVerifier);
+    const expiresAt = Math.floor(Date.now() / 1000) + (tokenData.expires_in || 3600);
+
+    await updateAiProvider(pendingState.providerId, {
+      status: 'connected',
+      availableModels: getOpenAiCodexModelOptions(),
+      lastError: null,
+      lastConnectedAt: new Date().toISOString(),
+      config: {
+        ...(provider.config ?? {}),
+        oauthPending: false,
+        oauthConfiguredAt: new Date().toISOString(),
+        accessToken: encryptToken(tokenData.access_token),
+        refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
+        expiresAt,
+        baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+        authMode: 'codex-oauth',
+      },
+    });
+
+    return {
+      statusCode: 200,
+      html: buildSuccessHtml(),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'OAuth token exchange failed';
+    await updateAiProvider(pendingState.providerId, {
+      status: 'error',
+      lastError: message,
+      config: {
+        oauthPending: false,
+      },
+    }).catch(() => undefined);
+
+    return {
+      statusCode: 500,
+      html: buildErrorHtml(message),
+    };
+  }
 }
 
 export async function getValidOpenAiCodexAccessToken(providerId: number) {
