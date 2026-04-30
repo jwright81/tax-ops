@@ -78,6 +78,55 @@ interface AiProvider {
   updatedAt: string;
 }
 
+interface ToolRun {
+  id: number;
+  toolType: string;
+  sourceKind: 'upload' | 'existing_document';
+  sourceDocumentId: number | null;
+  sourceFilename: string;
+  sourcePath: string;
+  clientId: number | null;
+  status: 'queued' | 'processing' | 'reviewing' | 'completed' | 'failed';
+  pageCount: number | null;
+  selectedPageRange: string | null;
+  detectedMetadata: Record<string, unknown> | null;
+  createdByUserId: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ToolRunPage {
+  id: number;
+  runId: number;
+  pageNumber: number;
+  status: 'queued' | 'processing' | 'ready' | 'reviewed' | 'failed';
+  reviewStatus: string;
+  previewPath: string | null;
+  textPath: string | null;
+  extractedText: string | null;
+  warnings: string[];
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ToolRunExport {
+  id: number;
+  runId: number;
+  exportType: string;
+  status: string;
+  outputPath: string | null;
+  summary: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ToolRunDetail {
+  run: ToolRun;
+  pages: ToolRunPage[];
+  exports: ToolRunExport[];
+}
+
 type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
 
 const tokenKey = 'tax-ops.token';
@@ -399,6 +448,12 @@ function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
+  const [toolRuns, setToolRuns] = useState<ToolRun[]>([]);
+  const [selectedToolRunId, setSelectedToolRunId] = useState<number | null>(null);
+  const [selectedToolRun, setSelectedToolRun] = useState<ToolRunDetail | null>(null);
+  const [toolRunSourceDocumentId, setToolRunSourceDocumentId] = useState('');
+  const [toolRunPageRange, setToolRunPageRange] = useState('1');
+  const [toolRunBusy, setToolRunBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createForm, setCreateForm] = useState({ username: '', password: '', role: 'staff' as UserRole, active: true });
@@ -482,13 +537,15 @@ function App() {
       const nextMe = meResult.user;
       setMe(nextMe);
 
-      const [jobsResult, documentsResult] = await Promise.all([
+      const [jobsResult, documentsResult, toolRunsResult] = await Promise.all([
         api<{ jobs: Job[] }>('/api/jobs', {}, activeToken),
         api<{ documents: DocumentItem[] }>('/api/documents', {}, activeToken),
+        api<{ runs: ToolRun[] }>('/api/tools/1099b/runs', {}, activeToken),
       ]);
 
       setJobs(jobsResult.jobs);
       setDocuments(documentsResult.documents);
+      setToolRuns(toolRunsResult.runs);
 
       if (nextMe.role === 'admin') {
         const [usersResult, settingsResult, aiProvidersResult] = await Promise.all([
@@ -574,6 +631,27 @@ function App() {
     }
   }, [selectedDocumentId]);
 
+  async function loadToolRun(runId: number, options: { background?: boolean } = {}) {
+    if (!token) return;
+    try {
+      const response = await api<ToolRunDetail>(`/api/tools/1099b/runs/${runId}`, {}, token);
+      setSelectedToolRun(response);
+      if (!options.background) {
+        setSuccessMessage(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load 1099-B run');
+    }
+  }
+
+  useEffect(() => {
+    if (selectedToolRunId) {
+      void loadToolRun(selectedToolRunId);
+    } else {
+      setSelectedToolRun(null);
+    }
+  }, [selectedToolRunId]);
+
   useEffect(() => {
     if (!token) return;
 
@@ -588,6 +666,10 @@ function App() {
           background: true,
           preserveReviewDraft: activeAdminTab === 'review' && reviewDirty,
         });
+      }
+
+      if (selectedToolRunId) {
+        void loadToolRun(selectedToolRunId, { background: true });
       }
     }, autoRefreshIntervalMs);
 
@@ -860,6 +942,85 @@ function App() {
       setSuccessMessage('AI routing saved.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save AI routing');
+    }
+  }
+
+  function parsePageRangeInput(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed) return [] as number[];
+    const pages = new Set<number>();
+    for (const part of trimmed.split(',')) {
+      const token = part.trim();
+      if (!token) continue;
+      if (token.includes('-')) {
+        const [startRaw, endRaw] = token.split('-', 2);
+        const start = Number(startRaw.trim());
+        const end = Number(endRaw.trim());
+        if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end <= 0 || end < start) {
+          throw new Error('Page range must use positive numbers like 1,3,5-7');
+        }
+        for (let page = start; page <= end; page += 1) pages.add(page);
+      } else {
+        const page = Number(token);
+        if (!Number.isInteger(page) || page <= 0) {
+          throw new Error('Page range must use positive numbers like 1,3,5-7');
+        }
+        pages.add(page);
+      }
+    }
+    return [...pages].sort((a, b) => a - b);
+  }
+
+  async function create1099BRunSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    const sourceDocumentId = Number(toolRunSourceDocumentId);
+    if (!Number.isFinite(sourceDocumentId)) {
+      setError('Choose a source document first.');
+      return;
+    }
+
+    const sourceDocument = documents.find((document) => document.id === sourceDocumentId);
+    if (!sourceDocument) {
+      setError('Selected document was not found in the current list.');
+      return;
+    }
+
+    let pageNumbers: number[];
+    try {
+      pageNumbers = parsePageRangeInput(toolRunPageRange);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid page range');
+      return;
+    }
+
+    if (pageNumbers.length === 0) {
+      setError('Enter at least one page number.');
+      return;
+    }
+
+    setToolRunBusy(true);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const detail = await api<ToolRunDetail>('/api/tools/1099b/runs', {
+        method: 'POST',
+        body: JSON.stringify({
+          sourceKind: 'existing_document',
+          sourceFilename: sourceDocument.originalFilename,
+          sourcePath: sourceDocument.currentPath,
+          sourceDocumentId,
+          selectedPageRange: toolRunPageRange.trim() || null,
+          pageNumbers,
+        }),
+      }, token);
+      setSelectedToolRunId(detail.run.id);
+      await loadData(token, { preserveSettingDrafts: true });
+      setSuccessMessage(`1099-B run #${detail.run.id} created for ${pageNumbers.length} page(s).`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create 1099-B run');
+    } finally {
+      setToolRunBusy(false);
     }
   }
 
@@ -1405,7 +1566,83 @@ function App() {
 
             {activeSection === 'admin' && !isAdmin ? <AdminAccessNotice /> : null}
             {activeSection === 'clients' ? <PlaceholderSection title="Clients" description="This area is reserved for client-facing workflow, filing organization, and future client record tools." /> : null}
-            {activeSection === 'extractor1099b' ? <PlaceholderSection title="1099-B Extractor" description="This tool slot is ready for the dedicated 1099-B extraction flow, with room for future import, parsing, and review steps." /> : null}
+            {activeSection === 'extractor1099b' ? (
+              <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+                <div className="grid gap-6">
+                  <Panel title="Create 1099-B run" subtitle="Start with an already-ingested document and selected page numbers.">
+                    <form className="grid gap-4" onSubmit={create1099BRunSubmit}>
+                      <label className="grid gap-2 text-sm">
+                        <span className="text-slate-300">Source document</span>
+                        <select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={toolRunSourceDocumentId} onChange={(event) => setToolRunSourceDocumentId(event.target.value)}>
+                          <option value="">Select a reviewed/intake document</option>
+                          {documents.map((document) => (
+                            <option key={document.id} value={document.id}>{document.id} · {document.originalFilename}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="grid gap-2 text-sm">
+                        <span className="text-slate-300">Page numbers</span>
+                        <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" placeholder="1 or 1,3,5-7" value={toolRunPageRange} onChange={(event) => setToolRunPageRange(event.target.value)} />
+                      </label>
+                      <div className="text-xs text-slate-500">Use existing ingested docs for this first pass. Upload flow can come next once the extraction path is proven.</div>
+                      <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={toolRunBusy} type="submit">{toolRunBusy ? 'Creating run…' : 'Create run'}</button>
+                    </form>
+                  </Panel>
+
+                  <Panel title="Recent runs" subtitle="Latest 1099-B extraction runs and current status.">
+                    <div className="grid gap-3">
+                      {toolRuns.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No 1099-B runs yet.</div> : null}
+                      {toolRuns.map((run) => (
+                        <button key={run.id} className={`rounded-2xl border px-4 py-4 text-left transition ${selectedToolRunId === run.id ? 'border-accent bg-accent/10' : 'border-line bg-[#0d1422] hover:bg-white/5'}`} onClick={() => setSelectedToolRunId(run.id)} type="button">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="font-medium text-text">Run #{run.id} · {run.sourceFilename}</div>
+                              <div className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{run.status} · {run.pageCount ?? 0} page(s)</div>
+                            </div>
+                            <div className="text-xs text-slate-500">{new Date(run.updatedAt).toLocaleString()}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </Panel>
+                </div>
+
+                <div className="grid gap-6">
+                  <Panel title="Run detail" subtitle="Page-level progress and extracted OCR text for the selected run.">
+                    {!selectedToolRun ? (
+                      <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">Select a run to inspect page progress and extracted results.</div>
+                    ) : (
+                      <div className="grid gap-4">
+                        <div className="rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-sm text-slate-300">
+                          <div><span className="text-slate-500">Run:</span> #{selectedToolRun.run.id}</div>
+                          <div><span className="text-slate-500">Source:</span> {selectedToolRun.run.sourceFilename}</div>
+                          <div><span className="text-slate-500">Path:</span> {selectedToolRun.run.sourcePath}</div>
+                          <div><span className="text-slate-500">Pages:</span> {selectedToolRun.run.selectedPageRange || selectedToolRun.run.pageCount || 'n/a'}</div>
+                          <div><span className="text-slate-500">Status:</span> {selectedToolRun.run.status}</div>
+                        </div>
+                        <div className="grid gap-3">
+                          {selectedToolRun.pages.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No pages have been queued for this run yet.</div> : null}
+                          {selectedToolRun.pages.map((page) => (
+                            <div key={page.id} className="rounded-2xl border border-line bg-[#0d1422] p-4">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <div className="font-medium text-text">Page {page.pageNumber}</div>
+                                  <div className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{page.status} · review {page.reviewStatus}</div>
+                                </div>
+                                <div className="text-xs text-slate-500">{new Date(page.updatedAt).toLocaleString()}</div>
+                              </div>
+                              {page.warnings.length > 0 ? <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{page.warnings.join(' | ')}</div> : null}
+                              {page.errorMessage ? <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">{page.errorMessage}</div> : null}
+                              <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-[#09111d] px-3 py-3 text-xs text-slate-300">{page.extractedText || 'No extracted text captured yet.'}</pre>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </Panel>
+                </div>
+              </section>
+            ) : null}
           </div>
         </div>
       </div>
