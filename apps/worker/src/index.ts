@@ -519,9 +519,19 @@ function decryptOpenAiToken(token: string) {
 
 async function resolveAiProviderChain() {
   const providers = await getAiProviders();
-  const defaultProvider = providers.find((provider) => Boolean(provider.is_default));
-  const fallbackProvider = providers.find((provider) => Boolean(provider.is_fallback) && provider.id !== defaultProvider?.id);
-  return [defaultProvider, fallbackProvider].filter(Boolean) as any[];
+  const connectedProviders = providers.filter((provider) => provider.status === 'connected' && provider.configured_model);
+  const defaultProvider = connectedProviders.find((provider) => Boolean(provider.is_default));
+  const fallbackProvider = connectedProviders.find((provider) => Boolean(provider.is_fallback) && provider.id !== defaultProvider?.id);
+
+  if (defaultProvider || fallbackProvider) {
+    return [defaultProvider, fallbackProvider].filter(Boolean) as any[];
+  }
+
+  if (connectedProviders.length === 1) {
+    return connectedProviders;
+  }
+
+  return [];
 }
 
 function build1099BExtractionPrompt(run: any, pageNumber: number, extractedText: string) {
@@ -672,7 +682,7 @@ async function callOpenAiCodex(provider: any, model: string, systemPrompt: strin
 async function extract1099BViaAi(run: any, pageNumber: number, extractedText: string) {
   const providerChain = await resolveAiProviderChain();
   if (providerChain.length === 0) {
-    throw new Error('No AI providers configured. Add and configure a default provider first.');
+    throw new Error('No routable AI providers configured. Set a default provider in AI Routing, or leave exactly one connected provider configured with a model.');
   }
 
   const prompt = build1099BExtractionPrompt(run, pageNumber, extractedText);

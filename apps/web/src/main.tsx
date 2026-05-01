@@ -1461,7 +1461,7 @@ function App() {
                     </form>
                   </Panel>
 
-                  <Panel title="Routing" subtitle="Global default and fallback for now, tool-specific overrides later.">
+                  <Panel title="Routing" subtitle="Global default and fallback for now, tool-specific overrides later. Extraction jobs use this routing.">
                     <div className="grid gap-4">
                       <label className="grid gap-2 text-sm">
                         <span className="text-slate-300">Default provider</span>
@@ -1584,7 +1584,7 @@ function App() {
                         <span className="text-slate-300">Page numbers</span>
                         <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" placeholder="1 or 1,3,5-7" value={toolRunPageRange} onChange={(event) => setToolRunPageRange(event.target.value)} />
                       </label>
-                      <div className="text-xs text-slate-500">Use existing ingested docs for this first pass. Upload flow can come next once the extraction path is proven.</div>
+                      <div className="text-xs text-slate-500">Use existing ingested docs for this first pass. Upload flow can come next once the extraction path is proven. Make sure AI Routing has a default provider set, unless you only have one connected provider with a configured model.</div>
                       <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={toolRunBusy} type="submit">{toolRunBusy ? 'Creating run…' : 'Create run'}</button>
                     </form>
                   </Panel>
