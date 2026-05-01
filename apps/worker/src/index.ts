@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import * as mariadb from 'mariadb';
 import dotenv from 'dotenv';
 
@@ -415,6 +416,31 @@ async function extractPdfPage(sourcePath: string, outputPath: string, pageNumber
   return outputPath;
 }
 
+async function extractEmbeddedPdfText(pdfPath: string) {
+  const data = await fs.readFile(pdfPath);
+  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(data) });
+
+  try {
+    const doc = await loadingTask.promise;
+    const pageTexts: string[] = [];
+
+    for (let pageIndex = 1; pageIndex <= doc.numPages; pageIndex += 1) {
+      const page = await doc.getPage(pageIndex);
+      const content = await page.getTextContent();
+      const text = content.items
+        .map((item: any) => ('str' in item && typeof item.str === 'string' ? item.str : ''))
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      if (text) pageTexts.push(text);
+    }
+
+    return pageTexts.join('\n\n').trim();
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
 async function runInternalOcrPass(
   settings: Record<string, string>,
   sourcePath: string,
@@ -426,16 +452,25 @@ async function runInternalOcrPass(
   const includeSidecar = options?.includeSidecar ?? settingEnabled(settings.ocr_sidecar, true);
   const command = buildInternalOcrCommand(settings, sourcePath, outputPath, sidecarPath, textHandling, { includeSidecar });
   const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', command]);
-  const details = [stderr?.trim(), stdout?.trim()].filter(Boolean).join(' | ');
-  const extractedText = includeSidecar ? await fs.readFile(sidecarPath, 'utf8').catch(() => '') : '';
+  let details = [stderr?.trim(), stdout?.trim()].filter(Boolean).join(' | ');
+  let extractedText = includeSidecar ? await fs.readFile(sidecarPath, 'utf8').catch(() => '') : '';
 
   if (includeSidecar) {
     await fs.unlink(sidecarPath).catch(() => undefined);
   }
 
+  extractedText = extractedText.trim();
+  if (!extractedText) {
+    const embeddedText = await extractEmbeddedPdfText(outputPath).catch(() => '');
+    if (embeddedText) {
+      extractedText = embeddedText;
+      details = [details, 'Recovered text from embedded PDF text layer because OCR sidecar was empty.'].filter(Boolean).join(' | ');
+    }
+  }
+
   return {
     details,
-    extractedText: extractedText.trim(),
+    extractedText,
   };
 }
 
