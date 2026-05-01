@@ -1,11 +1,14 @@
 import express from 'express';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import multer from 'multer';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { authenticate } from '../auth/login.js';
 import { type AuthenticatedRequest, requireAdmin, requireAuth } from '../auth/requireAuth.js';
 import { pool } from '../db/pool.js';
+import { env } from '../config/env.js';
 import { createAiProvider, listAiProviders, probeAiProvider, setAiProviderModel, setAiRouting, updateAiProvider } from '../modules/aiProviders.js';
 import { completeOpenAiCodexOAuth, disconnectOpenAiCodexOAuth, startOpenAiCodexOAuth } from '../modules/openaiCodexOAuth.js';
 import { createDocument, createJob, getDocumentById, listDocuments, listJobs, queueDocumentOcrRerun, updateDocumentReview } from '../modules/jobs.js';
@@ -15,6 +18,24 @@ import { createUser, getUserById, listUsers, recordAudit, resetUserPassword, upd
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDistPath = path.resolve(__dirname, '../../../../../../../apps/web/dist');
+const toolUploadRoot = path.join(env.ORIGINALS_FOLDER, 'tool-uploads', '1099b');
+const toolUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
+function sanitizeFilename(filename: string) {
+  return path.basename(filename).replace(/[^a-zA-Z0-9._-]+/g, '_') || 'upload.pdf';
+}
+
+async function writeToolUpload(file: Express.Multer.File) {
+  const safeName = sanitizeFilename(file.originalname.toLowerCase().endsWith('.pdf') ? file.originalname : `${file.originalname}.pdf`);
+  const storedName = `${Date.now()}-${safeName}`;
+  await fs.mkdir(toolUploadRoot, { recursive: true });
+  const storedPath = path.join(toolUploadRoot, storedName);
+  await fs.writeFile(storedPath, file.buffer);
+  return {
+    sourceFilename: safeName,
+    sourcePath: storedPath,
+  };
+}
 
 const createUserSchema = z.object({
   username: z.string().min(3).max(100),
@@ -85,7 +106,18 @@ const create1099BRunSchema = z
         path: ['sourceDocumentId'],
       });
     }
+    if (value.sourceKind === 'upload' && value.sourceDocumentId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'sourceDocumentId is not used for upload runs',
+        path: ['sourceDocumentId'],
+      });
+    }
   });
+
+const upload1099BSourceSchema = z.object({
+  upload: z.literal('1099b-source'),
+});
 
 const createAiProviderSchema = z.object({
   kind: z.enum(['openai', 'lmstudio', 'ollama']),
@@ -543,6 +575,29 @@ export function createApp() {
     }
 
     res.json(detail);
+  });
+
+  app.post('/api/tools/1099b/uploads', requireAuth, requireAdmin, toolUpload.single('file'), async (req: AuthenticatedRequest, res) => {
+    const parsed = upload1099BSourceSchema.safeParse({ upload: req.body?.upload });
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid upload request' });
+      return;
+    }
+
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ error: 'PDF upload is required' });
+      return;
+    }
+
+    if (file.mimetype !== 'application/pdf') {
+      res.status(400).json({ error: 'Only PDF uploads are supported' });
+      return;
+    }
+
+    const uploaded = await writeToolUpload(file);
+    await recordAudit(req.auth!.userId, 'tool_run.upload_1099b_source', 'tool_run', uploaded.sourceFilename, uploaded);
+    res.status(201).json(uploaded);
   });
 
   app.post('/api/tools/1099b/runs', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {

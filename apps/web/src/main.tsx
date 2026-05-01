@@ -127,6 +127,11 @@ interface ToolRunDetail {
   exports: ToolRunExport[];
 }
 
+interface ToolUploadResponse {
+  sourceFilename: string;
+  sourcePath: string;
+}
+
 type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
 
 const tokenKey = 'tax-ops.token';
@@ -222,7 +227,9 @@ function paginateItems<T>(items: T[], page: number, size = pageSize) {
 
 async function api<T>(path: string, options: RequestInit = {}, token?: string | null): Promise<T> {
   const headers = new Headers(options.headers);
-  headers.set('Content-Type', 'application/json');
+  if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
@@ -451,8 +458,9 @@ function App() {
   const [toolRuns, setToolRuns] = useState<ToolRun[]>([]);
   const [selectedToolRunId, setSelectedToolRunId] = useState<number | null>(null);
   const [selectedToolRun, setSelectedToolRun] = useState<ToolRunDetail | null>(null);
-  const [toolRunSourceDocumentId, setToolRunSourceDocumentId] = useState('');
-  const [toolRunPageRange, setToolRunPageRange] = useState('1');
+  const [toolRunUploadFile, setToolRunUploadFile] = useState<File | null>(null);
+  const [toolRunStartPage, setToolRunStartPage] = useState('1');
+  const [toolRunEndPage, setToolRunEndPage] = useState('1');
   const [toolRunBusy, setToolRunBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -945,57 +953,38 @@ function App() {
     }
   }
 
-  function parsePageRangeInput(value: string) {
-    const trimmed = value.trim();
-    if (!trimmed) return [] as number[];
-    const pages = new Set<number>();
-    for (const part of trimmed.split(',')) {
-      const token = part.trim();
-      if (!token) continue;
-      if (token.includes('-')) {
-        const [startRaw, endRaw] = token.split('-', 2);
-        const start = Number(startRaw.trim());
-        const end = Number(endRaw.trim());
-        if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end <= 0 || end < start) {
-          throw new Error('Page range must use positive numbers like 1,3,5-7');
-        }
-        for (let page = start; page <= end; page += 1) pages.add(page);
-      } else {
-        const page = Number(token);
-        if (!Number.isInteger(page) || page <= 0) {
-          throw new Error('Page range must use positive numbers like 1,3,5-7');
-        }
-        pages.add(page);
-      }
+  function buildPageNumbers(startValue: string, endValue: string) {
+    const start = Number(startValue);
+    const end = Number(endValue);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end <= 0 || end < start) {
+      throw new Error('Start and end pages must be positive whole numbers, and end page must be at least the start page.');
     }
-    return [...pages].sort((a, b) => a - b);
+
+    const pages: number[] = [];
+    for (let page = start; page <= end; page += 1) {
+      pages.push(page);
+    }
+    return pages;
   }
 
   async function create1099BRunSubmit(event: FormEvent) {
     event.preventDefault();
     if (!token) return;
-    const sourceDocumentId = Number(toolRunSourceDocumentId);
-    if (!Number.isFinite(sourceDocumentId)) {
-      setError('Choose a source document first.');
+    if (!toolRunUploadFile) {
+      setError('Choose a PDF to upload first.');
       return;
     }
 
-    const sourceDocument = documents.find((document) => document.id === sourceDocumentId);
-    if (!sourceDocument) {
-      setError('Selected document was not found in the current list.');
+    if (toolRunUploadFile.type && toolRunUploadFile.type !== 'application/pdf') {
+      setError('Only PDF uploads are supported.');
       return;
     }
 
     let pageNumbers: number[];
     try {
-      pageNumbers = parsePageRangeInput(toolRunPageRange);
+      pageNumbers = buildPageNumbers(toolRunStartPage, toolRunEndPage);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid page range');
-      return;
-    }
-
-    if (pageNumbers.length === 0) {
-      setError('Enter at least one page number.');
       return;
     }
 
@@ -1003,19 +992,29 @@ function App() {
     setError(null);
     setSuccessMessage(null);
     try {
+      const uploadForm = new FormData();
+      uploadForm.append('upload', '1099b-source');
+      uploadForm.append('file', toolRunUploadFile);
+
+      const uploaded = await api<ToolUploadResponse>('/api/tools/1099b/uploads', {
+        method: 'POST',
+        body: uploadForm,
+      }, token);
+
       const detail = await api<ToolRunDetail>('/api/tools/1099b/runs', {
         method: 'POST',
         body: JSON.stringify({
-          sourceKind: 'existing_document',
-          sourceFilename: sourceDocument.originalFilename,
-          sourcePath: sourceDocument.currentPath,
-          sourceDocumentId,
-          selectedPageRange: toolRunPageRange.trim() || null,
+          sourceKind: 'upload',
+          sourceFilename: uploaded.sourceFilename,
+          sourcePath: uploaded.sourcePath,
+          sourceDocumentId: null,
+          selectedPageRange: toolRunStartPage === toolRunEndPage ? toolRunStartPage.trim() : `${toolRunStartPage.trim()}-${toolRunEndPage.trim()}`,
           pageNumbers,
         }),
       }, token);
       setSelectedToolRunId(detail.run.id);
       await loadData(token, { preserveSettingDrafts: true });
+      setToolRunUploadFile(null);
       setSuccessMessage(`1099-B run #${detail.run.id} created for ${pageNumbers.length} page(s).`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create 1099-B run');
@@ -1569,22 +1568,23 @@ function App() {
             {activeSection === 'extractor1099b' ? (
               <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
                 <div className="grid gap-6">
-                  <Panel title="Create 1099-B run" subtitle="Start with an already-ingested document and selected page numbers.">
+                  <Panel title="Create 1099-B to TXF run" subtitle="Upload a PDF and choose an inclusive page range for extraction.">
                     <form className="grid gap-4" onSubmit={create1099BRunSubmit}>
                       <label className="grid gap-2 text-sm">
-                        <span className="text-slate-300">Source document</span>
-                        <select className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" value={toolRunSourceDocumentId} onChange={(event) => setToolRunSourceDocumentId(event.target.value)}>
-                          <option value="">Select a reviewed/intake document</option>
-                          {documents.map((document) => (
-                            <option key={document.id} value={document.id}>{document.id} · {document.originalFilename}</option>
-                          ))}
-                        </select>
+                        <span className="text-slate-300">Source PDF</span>
+                        <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" type="file" accept="application/pdf" onChange={(event) => setToolRunUploadFile(event.target.files?.[0] ?? null)} />
                       </label>
-                      <label className="grid gap-2 text-sm">
-                        <span className="text-slate-300">Page numbers</span>
-                        <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" placeholder="1 or 1,3,5-7" value={toolRunPageRange} onChange={(event) => setToolRunPageRange(event.target.value)} />
-                      </label>
-                      <div className="text-xs text-slate-500">Use existing ingested docs for this first pass. Upload flow can come next once the extraction path is proven. Make sure AI Routing has a default provider set, unless you only have one connected provider with a configured model.</div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <label className="grid gap-2 text-sm">
+                          <span className="text-slate-300">Start page</span>
+                          <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" inputMode="numeric" placeholder="1" value={toolRunStartPage} onChange={(event) => setToolRunStartPage(event.target.value)} />
+                        </label>
+                        <label className="grid gap-2 text-sm">
+                          <span className="text-slate-300">End page</span>
+                          <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" inputMode="numeric" placeholder="1" value={toolRunEndPage} onChange={(event) => setToolRunEndPage(event.target.value)} />
+                        </label>
+                      </div>
+                      <div className="text-xs text-slate-500">The uploaded PDF is stored for this tool run only. Use the same number in both fields to test a single page. Make sure AI Routing has a default provider set, unless you only have one connected provider with a configured model.</div>
                       <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={toolRunBusy} type="submit">{toolRunBusy ? 'Creating run…' : 'Create run'}</button>
                     </form>
                   </Panel>
