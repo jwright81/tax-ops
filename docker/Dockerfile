@@ -11,6 +11,7 @@ COPY PROJECT_STRUCTURE.md ./
 COPY .env.example ./
 
 RUN npm install
+RUN npm install --no-save @rollup/rollup-linux-x64-gnu
 RUN npm run build
 
 FROM node:22-bookworm-slim AS runtime
