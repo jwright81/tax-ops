@@ -234,6 +234,14 @@ function formatToolValue(value: unknown) {
   return String(value);
 }
 
+function normalizedTransactionRows(page: ToolRunPage) {
+  return (page.result?.normalizedRows ?? []).filter((row) => row.rowType === 'transaction');
+}
+
+function resultSummaryValue(page: ToolRunPage, key: string) {
+  return page.result?.result?.[key] ?? null;
+}
+
 function getStoredToken() {
   return window.localStorage.getItem(tokenKey);
 }
@@ -1657,11 +1665,13 @@ function App() {
                         </div>
                         <div className="grid gap-3">
                           {selectedToolRun.pages.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No pages have been queued for this run yet.</div> : null}
-                          {selectedToolRun.pages.map((page) => (
+                          {selectedToolRun.pages.map((page) => {
+                            const transactionRows = normalizedTransactionRows(page);
+                            return (
                             <div key={page.id} className="rounded-2xl border border-line bg-[#0d1422] p-4">
                               <div className="flex items-center justify-between gap-3">
                                 <div>
-                                  <div className="font-medium text-text">Page {page.pageNumber}</div>
+                                  <div className="font-medium text-text">Source page {page.pageNumber}</div>
                                   <div className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{page.status} · review {page.reviewStatus}</div>
                                   {toolRunPageStatusHelp(page) ? <div className="mt-2 text-xs normal-case tracking-normal text-slate-400">{toolRunPageStatusHelp(page)}</div> : null}
                                 </div>
@@ -1672,15 +1682,18 @@ function App() {
                               {page.result ? (
                                 <div className="mt-3 rounded-xl border border-line bg-[#09111d] p-3">
                                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-                                    <span>Structured output · {page.result.normalizedRows.length} transaction row(s)</span>
-                                    {page.result.result?.broker ? <span>Broker: {formatToolValue(page.result.result.broker)}</span> : null}
+                                    <span>Structured output · {transactionRows.length} transaction row(s)</span>
+                                    <span>Form: {formatToolValue(resultSummaryValue(page, 'detectedForm'))}</span>
+                                    <span>Broker: {formatToolValue(resultSummaryValue(page, 'broker'))}</span>
+                                    <span>Tax year: {formatToolValue(resultSummaryValue(page, 'taxYear'))}</span>
                                   </div>
-                                  {page.result.normalizedRows.length > 0 ? (
+                                  {transactionRows.length > 0 ? (
                                     <div className="mt-3 overflow-x-auto">
                                       <table className="min-w-full text-left text-xs text-slate-300">
                                         <thead className="text-slate-500">
                                           <tr>
                                             <th className="px-2 py-1">Description</th>
+                                            <th className="px-2 py-1">Symbol</th>
                                             <th className="px-2 py-1">Acquired</th>
                                             <th className="px-2 py-1">Sold</th>
                                             <th className="px-2 py-1 text-right">Proceeds</th>
@@ -1690,9 +1703,10 @@ function App() {
                                           </tr>
                                         </thead>
                                         <tbody>
-                                          {page.result.normalizedRows.map((row, rowIndex) => (
+                                          {transactionRows.map((row, rowIndex) => (
                                             <tr key={`${page.id}-${rowIndex}`} className="border-t border-line/70">
-                                              <td className="px-2 py-1">{formatToolValue(row.description || row.symbol)}</td>
+                                              <td className="px-2 py-1">{formatToolValue(row.description)}</td>
+                                              <td className="px-2 py-1">{formatToolValue(row.symbol)}</td>
                                               <td className="px-2 py-1">{formatToolValue(row.dateAcquired)}</td>
                                               <td className="px-2 py-1">{formatToolValue(row.dateSold)}</td>
                                               <td className="px-2 py-1 text-right">{formatToolValue(row.proceeds)}</td>
@@ -1714,7 +1728,8 @@ function App() {
                                 <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap">{page.extractedText || 'No extracted text captured yet.'}</pre>
                               </details>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
