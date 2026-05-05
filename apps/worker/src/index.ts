@@ -721,7 +721,7 @@ async function callOllama(baseUrl: string, model: string, systemPrompt: string, 
   return payload?.message?.content ?? '{}';
 }
 
-async function callOpenAiCodex(provider: any, model: string, systemPrompt: string, userPrompt: string) {
+async function callOpenAiCodex(provider: any, model: string, systemPrompt: string, userPrompt: string, pagePdfPath?: string) {
   const config = parseJson<Record<string, unknown>>(provider.config_json) ?? {};
   const accessToken = await getValidOpenAiCodexToken(provider, config);
   const jwtParts = accessToken.split('.');
@@ -729,6 +729,16 @@ async function callOpenAiCodex(provider: any, model: string, systemPrompt: strin
   const jwtPayload = JSON.parse(Buffer.from(jwtParts[1], 'base64').toString('utf8'));
   const accountId = jwtPayload?.['https://api.openai.com/auth']?.chatgpt_account_id;
   if (!accountId) throw new Error('chatgpt_account_id missing from OpenAI Codex token');
+
+  const userContent: Array<Record<string, string>> = [{ type: 'input_text', text: userPrompt }];
+  if (pagePdfPath) {
+    const pdfBase64 = await fs.readFile(pagePdfPath, 'base64');
+    userContent.push({
+      type: 'input_file',
+      filename: path.basename(pagePdfPath),
+      file_data: `data:application/pdf;base64,${pdfBase64}`,
+    });
+  }
 
   const response = await fetch(OPENAI_CODEX_RESPONSES_URL, {
     method: 'POST',
@@ -745,7 +755,7 @@ async function callOpenAiCodex(provider: any, model: string, systemPrompt: strin
       store: false,
       stream: true,
       instructions: systemPrompt,
-      input: [{ role: 'user', content: userPrompt }],
+      input: [{ role: 'user', content: userContent }],
       text: { format: { type: 'json_object' } },
     }),
   });
@@ -782,7 +792,7 @@ async function callOpenAiCodex(provider: any, model: string, systemPrompt: strin
   return content || '{}';
 }
 
-async function extract1099BViaAi(run: any, pageNumber: number, extractedText: string) {
+async function extract1099BViaAi(run: any, pageNumber: number, extractedText: string, pagePdfPath?: string) {
   const providerChain = await resolveAiProviderChain();
   if (providerChain.length === 0) {
     throw new Error('No routable AI providers configured. Set a default provider in AI Routing, or leave exactly one connected provider configured with a model.');
@@ -808,7 +818,7 @@ async function extract1099BViaAi(run: any, pageNumber: number, extractedText: st
         const baseUrl = String(config.baseUrl || 'http://127.0.0.1:11434');
         raw = await callOllama(baseUrl, model, prompt.system, prompt.user);
       } else if (provider.kind === 'openai') {
-        raw = await callOpenAiCodex(provider, model, prompt.system, prompt.user);
+        raw = await callOpenAiCodex(provider, model, prompt.system, prompt.user, pagePdfPath);
       }
 
       const parsed = JSON.parse(raw);
@@ -873,7 +883,7 @@ async function process1099BExtractPageJob(job: any, settings: Record<string, str
 
   await extractPdfPage(run.source_path, pagePdfPath, pageNumber);
   const ocr = await runOcrStep(pagePdfPath, pageFileName, settings, payload);
-  const aiResult = await extract1099BViaAi(run, pageNumber, ocr.extractedText);
+  const aiResult = await extract1099BViaAi(run, pageNumber, ocr.extractedText, pagePdfPath);
 
   await updateToolRunPage(runId, pageNumber, {
     status: 'ready',
