@@ -1619,6 +1619,9 @@ function App() {
                           <div><span className="text-slate-500">Path:</span> {selectedToolRun.run.sourcePath}</div>
                           <div><span className="text-slate-500">Pages:</span> {selectedToolRun.run.selectedPageRange || selectedToolRun.run.pageCount || 'n/a'}</div>
                           <div><span className="text-slate-500">Status:</span> {selectedToolRun.run.status}</div>
+                          {selectedToolRun.run.status === 'reviewing' ? (
+                            <div className="mt-2 text-xs text-slate-400">Extraction is complete for ready pages; review is still pending.</div>
+                          ) : null}
                         </div>
                         <div className="grid gap-3">
                           {selectedToolRun.pages.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No pages have been queued for this run yet.</div> : null}
