@@ -95,6 +95,16 @@ interface ToolRun {
   updatedAt: string;
 }
 
+interface ToolRunPageResult {
+  id: number;
+  runPageId: number;
+  result: Record<string, unknown> | null;
+  normalizedRows: Record<string, unknown>[];
+  audit: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface ToolRunPage {
   id: number;
   runId: number;
@@ -105,6 +115,7 @@ interface ToolRunPage {
   textPath: string | null;
   extractedText: string | null;
   warnings: string[];
+  result: ToolRunPageResult | null;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
@@ -215,6 +226,12 @@ function toolRunPageStatusHelp(page: ToolRunPage) {
   if (page.status === 'reviewed') return 'A reviewer has approved this page.';
   if (page.status === 'failed') return 'This page failed extraction and needs attention.';
   return null;
+}
+
+function formatToolValue(value: unknown) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return String(value);
 }
 
 function getStoredToken() {
@@ -1652,7 +1669,50 @@ function App() {
                               </div>
                               {page.warnings.length > 0 ? <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{page.warnings.join(' | ')}</div> : null}
                               {page.errorMessage ? <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">{page.errorMessage}</div> : null}
-                              <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-[#09111d] px-3 py-3 text-xs text-slate-300">{page.extractedText || 'No extracted text captured yet.'}</pre>
+                              {page.result ? (
+                                <div className="mt-3 rounded-xl border border-line bg-[#09111d] p-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                                    <span>Structured output · {page.result.normalizedRows.length} transaction row(s)</span>
+                                    {page.result.result?.broker ? <span>Broker: {formatToolValue(page.result.result.broker)}</span> : null}
+                                  </div>
+                                  {page.result.normalizedRows.length > 0 ? (
+                                    <div className="mt-3 overflow-x-auto">
+                                      <table className="min-w-full text-left text-xs text-slate-300">
+                                        <thead className="text-slate-500">
+                                          <tr>
+                                            <th className="px-2 py-1">Description</th>
+                                            <th className="px-2 py-1">Acquired</th>
+                                            <th className="px-2 py-1">Sold</th>
+                                            <th className="px-2 py-1 text-right">Proceeds</th>
+                                            <th className="px-2 py-1 text-right">Cost</th>
+                                            <th className="px-2 py-1 text-right">Gain/Loss</th>
+                                            <th className="px-2 py-1">Wash</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {page.result.normalizedRows.map((row, rowIndex) => (
+                                            <tr key={`${page.id}-${rowIndex}`} className="border-t border-line/70">
+                                              <td className="px-2 py-1">{formatToolValue(row.description || row.symbol)}</td>
+                                              <td className="px-2 py-1">{formatToolValue(row.dateAcquired)}</td>
+                                              <td className="px-2 py-1">{formatToolValue(row.dateSold)}</td>
+                                              <td className="px-2 py-1 text-right">{formatToolValue(row.proceeds)}</td>
+                                              <td className="px-2 py-1 text-right">{formatToolValue(row.costBasis)}</td>
+                                              <td className="px-2 py-1 text-right">{formatToolValue(row.gainOrLoss)}</td>
+                                              <td className="px-2 py-1">{formatToolValue(row.washSaleDisallowed)}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  ) : (
+                                    <div className="mt-3 text-xs text-slate-500">No structured transaction rows were returned for this page.</div>
+                                  )}
+                                </div>
+                              ) : null}
+                              <details className="mt-3 rounded-xl border border-line bg-[#09111d] px-3 py-3 text-xs text-slate-300">
+                                <summary className="cursor-pointer text-slate-400">OCR/debug text</summary>
+                                <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap">{page.extractedText || 'No extracted text captured yet.'}</pre>
+                              </details>
                             </div>
                           ))}
                         </div>

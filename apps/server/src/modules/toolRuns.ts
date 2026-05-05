@@ -45,6 +45,16 @@ function mapRunPage(row: any) {
     extractedText: row.extracted_text,
     warnings: parseJson<string[]>(row.warnings_json) ?? [],
     errorMessage: row.error_message,
+    result: row.result_id
+      ? {
+          id: row.result_id,
+          result: parseJson<Record<string, unknown>>(row.result_json),
+          normalizedRows: parseJson<Record<string, unknown>[]>(row.normalized_rows_json) ?? [],
+          audit: parseJson<Record<string, unknown>>(row.audit_json),
+          createdAt: new Date(row.result_created_at).toISOString(),
+          updatedAt: new Date(row.result_updated_at).toISOString(),
+        }
+      : null,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -58,6 +68,18 @@ function mapRunExport(row: any) {
     status: row.status,
     outputPath: row.output_path,
     summary: parseJson<Record<string, unknown>>(row.summary_json),
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+function mapRunPageResult(row: any) {
+  return {
+    id: row.id,
+    runPageId: row.run_page_id,
+    result: parseJson<Record<string, unknown>>(row.result_json),
+    normalizedRows: parseJson<Record<string, unknown>[]>(row.normalized_rows_json) ?? [],
+    audit: parseJson<Record<string, unknown>>(row.audit_json),
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -99,10 +121,13 @@ export async function listToolRunPages(runId: number) {
   const conn = await pool.getConnection();
   try {
     const rows = await conn.query(
-      `SELECT id, run_id, page_number, status, review_status, preview_path, text_path, extracted_text, warnings_json, error_message, created_at, updated_at
-       FROM tool_run_pages
-       WHERE run_id = ?
-       ORDER BY page_number ASC`,
+      `SELECT
+         p.id, p.run_id, p.page_number, p.status, p.review_status, p.preview_path, p.text_path, p.extracted_text, p.warnings_json, p.error_message, p.created_at, p.updated_at,
+         r.id AS result_id, r.result_json, r.normalized_rows_json, r.audit_json, r.created_at AS result_created_at, r.updated_at AS result_updated_at
+       FROM tool_run_pages p
+       LEFT JOIN tool_run_page_results r ON r.run_page_id = p.id
+       WHERE p.run_id = ?
+       ORDER BY p.page_number ASC`,
       [runId],
     );
     return (Array.isArray(rows) ? rows : []).map(mapRunPage);
@@ -122,6 +147,23 @@ export async function listToolRunExports(runId: number) {
       [runId],
     );
     return (Array.isArray(rows) ? rows : []).map(mapRunExport);
+  } finally {
+    conn.release();
+  }
+}
+
+export async function listToolRunPageResults(runId: number) {
+  const conn = await pool.getConnection();
+  try {
+    const rows = await conn.query(
+      `SELECT r.id, r.run_page_id, r.result_json, r.normalized_rows_json, r.audit_json, r.created_at, r.updated_at
+       FROM tool_run_page_results r
+       INNER JOIN tool_run_pages p ON p.id = r.run_page_id
+       WHERE p.run_id = ?
+       ORDER BY p.page_number ASC`,
+      [runId],
+    );
+    return (Array.isArray(rows) ? rows : []).map(mapRunPageResult);
   } finally {
     conn.release();
   }
@@ -229,12 +271,14 @@ export async function create1099BRun(input: {
 }
 
 export async function build1099BRunDetail(runId: number) {
-  const [run, pages, exports] = await Promise.all([
+  const [run, pages, pageResults, exports] = await Promise.all([
     getToolRunById(runId),
     listToolRunPages(runId),
+    listToolRunPageResults(runId),
     listToolRunExports(runId),
   ]);
 
   if (!run) return null;
-  return { run, pages, exports };
+  const resultsByPageId = new Map(pageResults.map((result) => [result.runPageId, result]));
+  return { run, pages: pages.map((page) => ({ ...page, result: resultsByPageId.get(page.id) ?? null })), exports };
 }
