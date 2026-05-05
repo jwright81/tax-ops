@@ -320,6 +320,8 @@ async function refreshToolRunAggregateStatus(runId: number) {
     let status: 'queued' | 'processing' | 'reviewing' | 'completed' | 'failed' = 'processing';
     if (totalCount > 0 && failedCount === totalCount) {
       status = 'failed';
+    } else if (totalCount > 0 && reviewedCount === totalCount) {
+      status = 'completed';
     } else if (pendingCount > 0) {
       status = readyCount > 0 || reviewedCount > 0 ? 'reviewing' : 'processing';
     } else if (readyCount > 0 || reviewedCount > 0) {
@@ -655,8 +657,34 @@ function build1099BExtractionPrompt(run: any, pageNumber: number, extractedText:
   };
 }
 
-function normalize1099BModelResponse(pageNumber: number, payload: any) {
+function normalizeTextForNeedle(value: string) {
+  return value.toUpperCase().replace(/[^A-Z0-9]+/g, ' ');
+}
+
+function warningLooksLikeVisibleTextFalsePositive(warning: string, extractedText: string) {
+  if (!extractedText.trim()) return false;
+  if (!/(ocr|distort|abbrev|truncat|shorten|visible|printed|source)/i.test(warning)) return false;
+  if (!/(abbrev|visible|printed|source|appears?\s+(?:to\s+be\s+)?(?:distort|truncat|short)|looks?\s+(?:distort|unusual|short)|distortions?\s+(?:such as|e\.g\.|including|like))/i.test(warning)) return false;
+
+  const source = ` ${normalizeTextForNeedle(extractedText)} `;
+  const tokens = Array.from(new Set(warning.match(/\b[A-Z0-9][A-Z0-9./&-]{2,15}\b/g) ?? []))
+    .map((token) => normalizeTextForNeedle(token).trim())
+    .filter((token) => token.length >= 3);
+
+  return tokens.some((token) => source.includes(` ${token} `));
+}
+
+function normalize1099BWarnings(payloadWarnings: unknown, extractedText: string) {
+  if (!Array.isArray(payloadWarnings)) return [];
+  return payloadWarnings
+    .map((warning) => String(warning).trim())
+    .filter(Boolean)
+    .filter((warning) => !warningLooksLikeVisibleTextFalsePositive(warning, extractedText));
+}
+
+function normalize1099BModelResponse(pageNumber: number, payload: any, extractedText = '') {
   const transactions = Array.isArray(payload?.transactions) ? payload.transactions : [];
+  const warnings = normalize1099BWarnings(payload?.warnings, extractedText);
   return {
     result: {
       pageNumber,
@@ -666,7 +694,7 @@ function normalize1099BModelResponse(pageNumber: number, payload: any) {
       accountLabel: payload?.accountLabel ?? null,
       taxYear: payload?.taxYear ?? null,
       transactionCountEstimate: transactions.length,
-      warnings: Array.isArray(payload?.warnings) ? payload.warnings : [],
+      warnings,
     },
     normalizedRows: transactions.map((row: any, index: number) => ({
       rowType: 'transaction',
@@ -682,7 +710,7 @@ function normalize1099BModelResponse(pageNumber: number, payload: any) {
       gainOrLoss: row?.gainOrLoss ?? null,
       term: row?.term ?? null,
     })),
-    warnings: Array.isArray(payload?.warnings) ? payload.warnings : [],
+    warnings,
   };
 }
 
@@ -825,7 +853,7 @@ async function extract1099BViaAi(run: any, pageNumber: number, extractedText: st
       }
 
       const parsed = JSON.parse(raw);
-      const normalized = normalize1099BModelResponse(pageNumber, parsed);
+      const normalized = normalize1099BModelResponse(pageNumber, parsed, extractedText);
       return {
         providerLabel: `${provider.kind}:${model}`,
         ...normalized,

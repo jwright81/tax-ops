@@ -201,6 +201,22 @@ function buildOcrCommandPreview(settingDrafts: Record<string, string>) {
   return args.map(shellPreview).join(' ');
 }
 
+function toolRunStatusHelp(status: ToolRun['status']) {
+  if (status === 'reviewing') return 'Extraction has produced review-ready pages and is waiting for human review/approval.';
+  if (status === 'processing') return 'Worker jobs are still OCRing/extracting pages.';
+  if (status === 'completed') return 'All pages that require review have been reviewed.';
+  if (status === 'failed') return 'All queued pages failed and need attention.';
+  return 'Pages are queued and waiting for the worker.';
+}
+
+function toolRunPageStatusHelp(page: ToolRunPage) {
+  if (page.status === 'ready' && page.reviewStatus === 'pending') return 'Ready means AI/OCR finished; review pending is expected until a reviewer approves or flags the page.';
+  if (page.status === 'processing') return 'OCR/extraction is still running for this page.';
+  if (page.status === 'reviewed') return 'A reviewer has approved this page.';
+  if (page.status === 'failed') return 'This page failed extraction and needs attention.';
+  return null;
+}
+
 function getStoredToken() {
   return window.localStorage.getItem(tokenKey);
 }
@@ -1598,6 +1614,7 @@ function App() {
                             <div>
                               <div className="font-medium text-text">Run #{run.id} · {run.sourceFilename}</div>
                               <div className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{run.status} · {run.pageCount ?? 0} page(s)</div>
+                              {run.status === 'reviewing' ? <div className="mt-2 text-xs normal-case tracking-normal text-slate-400">Awaiting page review; ready/pending pages are expected.</div> : null}
                             </div>
                             <div className="text-xs text-slate-500">{new Date(run.updatedAt).toLocaleString()}</div>
                           </div>
@@ -1619,9 +1636,7 @@ function App() {
                           <div><span className="text-slate-500">Path:</span> {selectedToolRun.run.sourcePath}</div>
                           <div><span className="text-slate-500">Pages:</span> {selectedToolRun.run.selectedPageRange || selectedToolRun.run.pageCount || 'n/a'}</div>
                           <div><span className="text-slate-500">Status:</span> {selectedToolRun.run.status}</div>
-                          {selectedToolRun.run.status === 'reviewing' ? (
-                            <div className="mt-2 text-xs text-slate-400">Extraction is complete for ready pages; review is still pending.</div>
-                          ) : null}
+                          <div className="mt-2 text-xs text-slate-400">{toolRunStatusHelp(selectedToolRun.run.status)}</div>
                         </div>
                         <div className="grid gap-3">
                           {selectedToolRun.pages.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No pages have been queued for this run yet.</div> : null}
@@ -1631,6 +1646,7 @@ function App() {
                                 <div>
                                   <div className="font-medium text-text">Page {page.pageNumber}</div>
                                   <div className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{page.status} · review {page.reviewStatus}</div>
+                                  {toolRunPageStatusHelp(page) ? <div className="mt-2 text-xs normal-case tracking-normal text-slate-400">{toolRunPageStatusHelp(page)}</div> : null}
                                 </div>
                                 <div className="text-xs text-slate-500">{new Date(page.updatedAt).toLocaleString()}</div>
                               </div>
