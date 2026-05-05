@@ -41,6 +41,10 @@ const defaultSettings = {
 type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
 type AiProviderKind = 'openai' | 'lmstudio' | 'ollama';
 
+const OPENAI_CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+const OPENAI_CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
+const OPENAI_CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
+
 const pool = mariadb.createPool({
   host: env.DB_HOST,
   port: env.DB_PORT,
@@ -552,6 +556,66 @@ function decryptOpenAiToken(token: string) {
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }
 
+function encryptOpenAiToken(token: string) {
+  const key = crypto.createHash('sha256').update(process.env.SESSION_SECRET || '').digest();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(token, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, encrypted]).toString('base64');
+}
+
+async function refreshOpenAiCodexToken(refreshToken: string) {
+  const response = await fetch(OPENAI_CODEX_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: OPENAI_CODEX_CLIENT_ID,
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    }).toString(),
+  });
+
+  if (!response.ok) throw new Error(`OpenAI Codex token refresh failed (${response.status}): ${await response.text()}`);
+  return (await response.json()) as { access_token: string; refresh_token?: string; expires_in?: number };
+}
+
+async function getValidOpenAiCodexToken(provider: any, config: Record<string, unknown>) {
+  const encryptedAccessToken = typeof config.accessToken === 'string' ? config.accessToken : null;
+  if (!encryptedAccessToken) throw new Error('OpenAI Codex OAuth token missing');
+
+  const encryptedRefreshToken = typeof config.refreshToken === 'string' ? config.refreshToken : null;
+  const expiresAt = Number(config.expiresAt ?? 0);
+  const now = Math.floor(Date.now() / 1000);
+
+  if (expiresAt > 0 && now >= expiresAt - 300 && encryptedRefreshToken) {
+    const refreshed = await refreshOpenAiCodexToken(decryptOpenAiToken(encryptedRefreshToken));
+    const nextExpiresAt = Math.floor(Date.now() / 1000) + (refreshed.expires_in || 3600);
+    const nextConfig = {
+      ...config,
+      accessToken: encryptOpenAiToken(refreshed.access_token),
+      refreshToken: refreshed.refresh_token ? encryptOpenAiToken(refreshed.refresh_token) : encryptedRefreshToken,
+      expiresAt: nextExpiresAt,
+      authMode: 'codex-oauth',
+      baseUrl: OPENAI_CODEX_RESPONSES_URL,
+    };
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.query(
+        `UPDATE ai_providers SET status = 'connected', config_json = ?, last_error = NULL, last_connected_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [JSON.stringify(nextConfig), provider.id],
+      );
+    } finally {
+      conn.release();
+    }
+
+    return refreshed.access_token;
+  }
+
+  return decryptOpenAiToken(encryptedAccessToken);
+}
+
 async function resolveAiProviderChain() {
   const providers = await getAiProviders();
   const connectedProviders = providers.filter((provider) => provider.status === 'connected' && provider.configured_model);
@@ -659,16 +723,14 @@ async function callOllama(baseUrl: string, model: string, systemPrompt: string, 
 
 async function callOpenAiCodex(provider: any, model: string, systemPrompt: string, userPrompt: string) {
   const config = parseJson<Record<string, unknown>>(provider.config_json) ?? {};
-  const encryptedAccessToken = typeof config.accessToken === 'string' ? config.accessToken : null;
-  if (!encryptedAccessToken) throw new Error('OpenAI Codex OAuth token missing');
-  const accessToken = await decryptOpenAiToken(encryptedAccessToken);
+  const accessToken = await getValidOpenAiCodexToken(provider, config);
   const jwtParts = accessToken.split('.');
   if (jwtParts.length < 2) throw new Error('Invalid OpenAI Codex JWT');
   const jwtPayload = JSON.parse(Buffer.from(jwtParts[1], 'base64').toString('utf8'));
   const accountId = jwtPayload?.['https://api.openai.com/auth']?.chatgpt_account_id;
   if (!accountId) throw new Error('chatgpt_account_id missing from OpenAI Codex token');
 
-  const response = await fetch('https://chatgpt.com/backend-api/codex/responses', {
+  const response = await fetch(OPENAI_CODEX_RESPONSES_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -690,14 +752,19 @@ async function callOpenAiCodex(provider: any, model: string, systemPrompt: strin
   if (!response.ok) throw new Error(`OpenAI Codex error (${response.status}): ${await response.text()}`);
   const raw = await response.text();
   let content = '';
+  let errorMessage = '';
   for (const line of raw.split('\n')) {
     if (!line.startsWith('data:')) continue;
     const data = line.slice(5).trim();
     if (data === '[DONE]') break;
     try {
       const event = JSON.parse(data);
+      if (event.type === 'error' || event.error) errorMessage = JSON.stringify(event.error || event);
       if (event.type === 'response.output_text.delta' && event.delta) content += event.delta;
       if (!content && (event.type === 'response.completed' || event.type === 'response.done')) {
+        if (event.response?.status === 'failed' || event.response?.error) {
+          errorMessage = JSON.stringify(event.response.error || event.response.status_details || event.response.status);
+        }
         const output = event.response?.output || [];
         for (const item of output) {
           if (item.type === 'message' && Array.isArray(item.content)) {
@@ -711,6 +778,7 @@ async function callOpenAiCodex(provider: any, model: string, systemPrompt: strin
       // ignore malformed lines
     }
   }
+  if (!content && errorMessage) throw new Error(`OpenAI Codex returned error: ${errorMessage}`);
   return content || '{}';
 }
 
