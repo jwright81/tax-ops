@@ -684,6 +684,24 @@ function normalize1099BWarnings(payloadWarnings: unknown, extractedText: string)
     .filter((warning) => !warningLooksLikeVisibleTextFalsePositive(warning, extractedText));
 }
 
+function normalizeTaxYear(value: unknown) {
+  if (value === null || value === undefined || value === '') return null;
+  const normalized = String(value).replace(/,/g, '').trim();
+  const yearMatch = normalized.match(/\b(19|20)\d{2}\b/);
+  return yearMatch?.[0] ?? normalized;
+}
+
+function normalize1099BQuantity(row: any) {
+  const value = row?.quantity ?? row?.shares ?? row?.units ?? row?.sharesSold ?? row?.numberOfShares ?? null;
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+
+  const text = String(value).trim();
+  if (!text) return null;
+  const numeric = Number(text.replace(/,/g, ''));
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function normalize1099BModelResponse(pageNumber: number, payload: any, extractedText = '') {
   const transactions = Array.isArray(payload?.transactions) ? payload.transactions : [];
   const warnings = normalize1099BWarnings(payload?.warnings, extractedText);
@@ -694,7 +712,7 @@ function normalize1099BModelResponse(pageNumber: number, payload: any, extracted
       detectedForm: payload?.detectedForm || '1099-B',
       broker: payload?.broker ?? null,
       accountLabel: payload?.accountLabel ?? null,
-      taxYear: payload?.taxYear ?? null,
+      taxYear: normalizeTaxYear(payload?.taxYear),
       transactionCountEstimate: transactions.length,
       warnings,
     },
@@ -703,7 +721,7 @@ function normalize1099BModelResponse(pageNumber: number, payload: any, extracted
       rowIndex: index,
       pageNumber,
       symbol: row?.symbol ?? null,
-      quantity: row?.quantity ?? null,
+      quantity: normalize1099BQuantity(row),
       description: row?.description ?? null,
       proceeds: row?.proceeds ?? null,
       costBasis: row?.costBasis ?? null,

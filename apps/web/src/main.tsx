@@ -239,6 +239,12 @@ function formatTaxYear(value: unknown) {
   return String(value).replace(/,/g, '');
 }
 
+function formatQuantity(value: unknown) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  return String(value);
+}
+
 function normalizedTransactionRows(page: ToolRunPage) {
   return (page.result?.normalizedRows ?? []).filter((row) => row.rowType === 'transaction');
 }
@@ -1698,7 +1704,7 @@ function App() {
                                         <thead className="text-slate-500">
                                           <tr>
                                             <th className="px-2 py-1">Description</th>
-                                            <th className="px-2 py-1">Qty</th>
+                                            <th className="px-2 py-1">Quantity</th>
                                             <th className="px-2 py-1">Symbol</th>
                                             <th className="px-2 py-1">Acquired</th>
                                             <th className="px-2 py-1">Sold</th>
@@ -1712,7 +1718,7 @@ function App() {
                                           {transactionRows.map((row, rowIndex) => (
                                             <tr key={`${page.id}-${rowIndex}`} className="border-t border-line/70">
                                               <td className="px-2 py-1">{formatToolValue(row.description)}</td>
-                                              <td className="px-2 py-1">{formatToolValue(row.quantity)}</td>
+                                              <td className="px-2 py-1">{formatQuantity(row.quantity)}</td>
                                               <td className="px-2 py-1">{formatToolValue(row.symbol)}</td>
                                               <td className="px-2 py-1">{formatToolValue(row.dateAcquired)}</td>
                                               <td className="px-2 py-1">{formatToolValue(row.dateSold)}</td>
