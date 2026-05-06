@@ -646,8 +646,9 @@ function build1099BExtractionPrompt(run: any, pageNumber: number, extractedText:
         'Use null for unknown scalar values.',
         'transactions must be an array of structured objects with keys: quantity, description, symbol, dateAcquired, dateSold, proceeds, costBasis, gainOrLoss, washSaleDisallowed, term.',
         'Return quantity separately when visible. Use a number for numeric share/unit quantities, otherwise null.',
-        'If the quantity is printed as part of the description line, keep the description text exactly as visible and also populate quantity separately.',
-        'Transcribe issuer/security descriptions exactly as visible; do not expand or "correct" brokerage abbreviations.',
+        'Return description without the leading quantity/share count. Example: visible text "4 STATE STRET TEC SELECT SEC SPDR ETF" must return quantity: 4 and description: "STATE STRET TEC SELECT SEC SPDR ETF".',
+        'If no separate quantity is visible, set quantity to null and return the visible security description without inventing a quantity.',
+        'Transcribe issuer/security descriptions exactly as visible after removing only the leading quantity; do not expand or "correct" brokerage abbreviations.',
         'Do not call visible abbreviations OCR distortions merely because they look shortened or unusual (for example STRET/STRT/ETF/ETE/IV-style issuer text).',
         'Only include OCR/noise warnings when a value is genuinely unreadable, conflicting between OCR text and PDF, or too ambiguous to trust.',
         'If the PDF page image/file and extracted OCR text disagree, prefer the PDF page and mention the conflict briefly in warnings.',
@@ -702,6 +703,17 @@ function normalize1099BQuantity(row: any) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function normalize1099BDescription(row: any, quantity: number | null) {
+  const value = row?.description ?? null;
+  if (value === null || value === undefined) return null;
+  const description = String(value).trim();
+  if (!description || quantity === null) return description || null;
+
+  const escapedQuantity = String(quantity).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const leadingQuantityPattern = new RegExp(`^${escapedQuantity}(?:\\.0+)?\\s+`);
+  return description.replace(leadingQuantityPattern, '').trim() || null;
+}
+
 function normalize1099BModelResponse(pageNumber: number, payload: any, extractedText = '') {
   const transactions = Array.isArray(payload?.transactions) ? payload.transactions : [];
   const warnings = normalize1099BWarnings(payload?.warnings, extractedText);
@@ -716,21 +728,24 @@ function normalize1099BModelResponse(pageNumber: number, payload: any, extracted
       transactionCountEstimate: transactions.length,
       warnings,
     },
-    normalizedRows: transactions.map((row: any, index: number) => ({
-      rowType: 'transaction',
-      rowIndex: index,
-      pageNumber,
-      symbol: row?.symbol ?? null,
-      quantity: normalize1099BQuantity(row),
-      description: row?.description ?? null,
-      proceeds: row?.proceeds ?? null,
-      costBasis: row?.costBasis ?? null,
-      dateAcquired: row?.dateAcquired ?? null,
-      dateSold: row?.dateSold ?? null,
-      washSaleDisallowed: row?.washSaleDisallowed ?? null,
-      gainOrLoss: row?.gainOrLoss ?? null,
-      term: row?.term ?? null,
-    })),
+    normalizedRows: transactions.map((row: any, index: number) => {
+      const quantity = normalize1099BQuantity(row);
+      return {
+        rowType: 'transaction',
+        rowIndex: index,
+        pageNumber,
+        symbol: row?.symbol ?? null,
+        quantity,
+        description: normalize1099BDescription(row, quantity),
+        proceeds: row?.proceeds ?? null,
+        costBasis: row?.costBasis ?? null,
+        dateAcquired: row?.dateAcquired ?? null,
+        dateSold: row?.dateSold ?? null,
+        washSaleDisallowed: row?.washSaleDisallowed ?? null,
+        gainOrLoss: row?.gainOrLoss ?? null,
+        term: row?.term ?? null,
+      };
+    }),
     warnings,
   };
 }
