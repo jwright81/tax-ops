@@ -234,6 +234,11 @@ function formatToolValue(value: unknown) {
   return String(value);
 }
 
+function formatTaxYear(value: unknown) {
+  if (value === null || value === undefined || value === '') return '—';
+  return String(value).replace(/,/g, '');
+}
+
 function normalizedTransactionRows(page: ToolRunPage) {
   return (page.result?.normalizedRows ?? []).filter((row) => row.rowType === 'transaction');
 }
@@ -1685,7 +1690,7 @@ function App() {
                                     <span>Structured output · {transactionRows.length} transaction row(s)</span>
                                     <span>Form: {formatToolValue(resultSummaryValue(page, 'detectedForm'))}</span>
                                     <span>Broker: {formatToolValue(resultSummaryValue(page, 'broker'))}</span>
-                                    <span>Tax year: {formatToolValue(resultSummaryValue(page, 'taxYear'))}</span>
+                                    <span>Tax year: {formatTaxYear(resultSummaryValue(page, 'taxYear'))}</span>
                                   </div>
                                   {transactionRows.length > 0 ? (
                                     <div className="mt-3 overflow-x-auto">
@@ -1693,6 +1698,7 @@ function App() {
                                         <thead className="text-slate-500">
                                           <tr>
                                             <th className="px-2 py-1">Description</th>
+                                            <th className="px-2 py-1">Qty</th>
                                             <th className="px-2 py-1">Symbol</th>
                                             <th className="px-2 py-1">Acquired</th>
                                             <th className="px-2 py-1">Sold</th>
@@ -1706,6 +1712,7 @@ function App() {
                                           {transactionRows.map((row, rowIndex) => (
                                             <tr key={`${page.id}-${rowIndex}`} className="border-t border-line/70">
                                               <td className="px-2 py-1">{formatToolValue(row.description)}</td>
+                                              <td className="px-2 py-1">{formatToolValue(row.quantity)}</td>
                                               <td className="px-2 py-1">{formatToolValue(row.symbol)}</td>
                                               <td className="px-2 py-1">{formatToolValue(row.dateAcquired)}</td>
                                               <td className="px-2 py-1">{formatToolValue(row.dateSold)}</td>
