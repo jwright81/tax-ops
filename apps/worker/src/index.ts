@@ -26,6 +26,7 @@ const env = {
 
 const defaultSettings = {
   ocr_mode: 'internal',
+  simultaneous_job_execution: '1',
   ocr_deskew: 'true',
   ocr_rotate_pages: 'true',
   ocr_jobs_enabled: 'true',
@@ -53,6 +54,8 @@ const pool = mariadb.createPool({
   password: env.DB_PASSWORD,
   connectionLimit: 4,
 });
+
+let tickRunning = false;
 
 async function waitForSettingsTable(retries = 20) {
   for (let attempt = 1; attempt <= retries; attempt += 1) {
@@ -98,6 +101,10 @@ async function getQueuedJobs(limit = 10) {
   } finally {
     conn.release();
   }
+}
+
+function normalizeJobConcurrency(value: string | undefined) {
+  return Math.min(10, Math.max(1, Number.parseInt(value || '1', 10) || 1));
 }
 
 async function getAiProviders() {
@@ -1026,10 +1033,9 @@ async function scanWatchFolder() {
 }
 
 async function processQueuedJobs() {
-  const jobs = await getQueuedJobs(5);
-  for (const job of jobs) {
-    const settings = await getSettingsMap();
-
+  const settings = await getSettingsMap();
+  const jobs = await getQueuedJobs(normalizeJobConcurrency(settings.simultaneous_job_execution));
+  await Promise.all(jobs.map(async (job) => {
     if (job.job_type === 'tool.1099b.extract_page') {
       try {
         await updateJobStatus(job.id, 'processing', 'Worker picked up 1099-B page extraction job');
@@ -1037,7 +1043,7 @@ async function processQueuedJobs() {
       } catch (error) {
         await fail1099BExtractPageJob(job, error);
       }
-      continue;
+      return;
     }
 
     try {
@@ -1081,12 +1087,18 @@ async function processQueuedJobs() {
       await updateJobStatus(job.id, 'failed', `Worker error: ${String(error)}`);
       console.error(`[worker] failed job #${job.id}`, error);
     }
-  }
+  }));
 }
 
 async function tick() {
+  if (tickRunning) return;
+  tickRunning = true;
+  try {
   await scanWatchFolder();
   await processQueuedJobs();
+  } finally {
+    tickRunning = false;
+  }
 }
 
 async function main() {

@@ -13,7 +13,7 @@ import { createAiProvider, listAiProviders, probeAiProvider, setAiProviderModel,
 import { completeOpenAiCodexOAuth, disconnectOpenAiCodexOAuth, startOpenAiCodexOAuth } from '../modules/openaiCodexOAuth.js';
 import { createDocument, createJob, getDocumentById, listDocuments, listJobs, queueDocumentOcrRerun, updateDocumentReview } from '../modules/jobs.js';
 import { listSettings, upsertSettings } from '../modules/settings.js';
-import { build1099BRunDetail, create1099BRun, listToolRuns } from '../modules/toolRuns.js';
+import { build1099BRunDetail, create1099BRun, getToolRunById, listToolRuns, reopenToolRun, updateToolRunDetectedMetadata } from '../modules/toolRuns.js';
 import { createUser, getUserById, listUsers, recordAudit, resetUserPassword, updateUser } from '../modules/users.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -117,6 +117,13 @@ const create1099BRunSchema = z
 
 const upload1099BSourceSchema = z.object({
   upload: z.literal('1099b-source'),
+});
+
+const update1099BMetadataSchema = z.object({
+  taxYear: z.string().max(10).optional().nullable(),
+  client: z.string().max(255).optional().nullable(),
+  broker: z.string().max(255).optional().nullable(),
+  accountLabel: z.string().max(255).optional().nullable(),
 });
 
 const createAiProviderSchema = z.object({
@@ -574,6 +581,64 @@ export function createApp() {
       return;
     }
 
+    res.json(detail);
+  });
+
+  app.get('/api/tools/1099b/runs/:id/source', requireAuth, async (req, res) => {
+    const runId = Number(req.params.id);
+    if (!Number.isFinite(runId)) {
+      res.status(400).json({ error: 'invalid run id' });
+      return;
+    }
+
+    const run = await getToolRunById(runId);
+    if (!run) {
+      res.status(404).json({ error: 'run not found' });
+      return;
+    }
+
+    res.type('application/pdf');
+    res.sendFile(run.sourcePath);
+  });
+
+  app.patch('/api/tools/1099b/runs/:id/metadata', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {
+    const runId = Number(req.params.id);
+    if (!Number.isFinite(runId)) {
+      res.status(400).json({ error: 'invalid run id' });
+      return;
+    }
+
+    const parsed = update1099BMetadataSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+
+    const run = await updateToolRunDetectedMetadata(runId, parsed.data);
+    if (!run) {
+      res.status(404).json({ error: 'run not found' });
+      return;
+    }
+
+    await recordAudit(req.auth!.userId, 'tool_run.update_1099b_metadata', 'tool_run', String(runId), parsed.data);
+    res.json({ run });
+  });
+
+  app.post('/api/tools/1099b/runs/:id/reopen', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {
+    const runId = Number(req.params.id);
+    if (!Number.isFinite(runId)) {
+      res.status(400).json({ error: 'invalid run id' });
+      return;
+    }
+
+    const run = await reopenToolRun(runId);
+    if (!run) {
+      res.status(404).json({ error: 'run not found' });
+      return;
+    }
+
+    await recordAudit(req.auth!.userId, 'tool_run.reopen_1099b', 'tool_run', String(runId), null);
+    const detail = await build1099BRunDetail(runId);
     res.json(detail);
   });
 

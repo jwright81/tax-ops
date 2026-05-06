@@ -8,6 +8,7 @@ export interface SystemSetting {
 const editableDefaultSettings: Record<string, string> = {
   office_name: 'Tax Office',
   auto_create_jobs: 'true',
+  simultaneous_job_execution: '1',
   ocr_mode: 'internal',
   ocr_deskew: 'true',
   ocr_rotate_pages: 'true',
@@ -24,6 +25,7 @@ const editableDefaultSettings: Record<string, string> = {
 const editableSettingKeys = [
   'office_name',
   'auto_create_jobs',
+  'simultaneous_job_execution',
   'ocr_mode',
   'ocr_deskew',
   'ocr_rotate_pages',
@@ -82,11 +84,14 @@ export async function upsertSettings(settings: SystemSetting[]) {
   try {
     for (const setting of settings) {
       if (!editableSettingKeySet.has(setting.key)) continue;
+      const value = setting.key === 'simultaneous_job_execution'
+        ? String(Math.min(10, Math.max(1, Number.parseInt(setting.value, 10) || 1)))
+        : setting.value;
       await conn.query(
         `INSERT INTO system_settings (setting_key, setting_value)
          VALUES (?, ?)
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
-        [setting.key, setting.value],
+        [setting.key, value],
       );
     }
   } finally {

@@ -117,6 +117,49 @@ export async function getToolRunById(runId: number) {
   }
 }
 
+export async function updateToolRunDetectedMetadata(runId: number, metadata: Record<string, unknown>) {
+  const existing = await getToolRunById(runId);
+  if (!existing) return null;
+  const conn = await pool.getConnection();
+  try {
+    const merged = {
+      ...(existing.detectedMetadata ?? {}),
+      ...metadata,
+      updatedByUser: true,
+    };
+    await conn.query(
+      `UPDATE tool_runs
+       SET detected_metadata_json = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [JSON.stringify(merged), runId],
+    );
+    return getToolRunById(runId);
+  } finally {
+    conn.release();
+  }
+}
+
+export async function reopenToolRun(runId: number) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `UPDATE tool_run_pages
+       SET status = 'ready', review_status = 'pending'
+       WHERE run_id = ? AND status = 'reviewed'`,
+      [runId],
+    );
+    await conn.query(
+      `UPDATE tool_runs
+       SET status = 'reviewing', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'completed'`,
+      [runId],
+    );
+    return getToolRunById(runId);
+  } finally {
+    conn.release();
+  }
+}
+
 export async function listToolRunPages(runId: number) {
   const conn = await pool.getConnection();
   try {

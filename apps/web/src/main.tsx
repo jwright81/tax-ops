@@ -144,6 +144,14 @@ interface ToolUploadResponse {
 }
 
 type OcrTextHandling = 'skip-text' | 'redo-ocr' | 'force-ocr';
+type ToolWorkspaceView = 'start' | 'recent' | 'detail';
+
+interface ToolMetadataDraft {
+  taxYear: string;
+  client: string;
+  broker: string;
+  accountLabel: string;
+}
 
 const tokenKey = 'tax-ops.token';
 const autoRefreshIntervalMs = 5000;
@@ -154,6 +162,7 @@ const officeSettingLabels: Record<(typeof officeSettingKeys)[number], string> = 
   auto_create_jobs: 'Auto Create Jobs',
 };
 const ocrDefaultSettings: Record<string, string> = {
+  simultaneous_job_execution: '1',
   ocr_mode: 'internal',
   ocr_deskew: 'true',
   ocr_rotate_pages: 'true',
@@ -253,6 +262,32 @@ function resultSummaryValue(page: ToolRunPage, key: string) {
   return page.result?.result?.[key] ?? null;
 }
 
+function stringFromMetadata(value: unknown) {
+  return value === null || value === undefined ? '' : String(value);
+}
+
+function aggregate1099BMetadata(detail: ToolRunDetail | null): ToolMetadataDraft {
+  const runMetadata = detail?.run.detectedMetadata ?? {};
+  const pageSummaries = detail?.pages.map((page) => page.result?.result ?? {}) ?? [];
+  const firstValue = (key: string) => pageSummaries.map((summary) => summary[key]).find((value) => value !== null && value !== undefined && value !== '');
+
+  return {
+    taxYear: stringFromMetadata(runMetadata.taxYear ?? firstValue('taxYear')),
+    client: stringFromMetadata(runMetadata.client ?? runMetadata.clientName ?? firstValue('client') ?? firstValue('clientName')),
+    broker: stringFromMetadata(runMetadata.broker ?? firstValue('broker')),
+    accountLabel: stringFromMetadata(runMetadata.accountLabel ?? firstValue('accountLabel')),
+  };
+}
+
+function cleanFilenamePart(value: string, fallback: string) {
+  const cleaned = value.trim().replace(/[^a-zA-Z0-9._ -]+/g, '').replace(/\s+/g, ' ');
+  return cleaned || fallback;
+}
+
+function buildTxfFilename(metadata: ToolMetadataDraft) {
+  return `${cleanFilenamePart(metadata.taxYear, 'TaxYear')} - ${cleanFilenamePart(metadata.client, 'Client')} - 1099-B - ${cleanFilenamePart(metadata.broker, 'Broker')}.txf`;
+}
+
 function getStoredToken() {
   return window.localStorage.getItem(tokenKey);
 }
@@ -293,6 +328,18 @@ async function api<T>(path: string, options: RequestInit = {}, token?: string | 
   }
 
   return response.json() as Promise<T>;
+}
+
+async function apiBlob(path: string, token?: string | null): Promise<Blob> {
+  const headers = new Headers();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const response = await fetch(path, { headers });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.blob();
 }
 
 function Panel(props: React.PropsWithChildren<{ title: string; subtitle?: string; actions?: React.ReactNode }>) {
@@ -510,10 +557,16 @@ function App() {
   const [toolRuns, setToolRuns] = useState<ToolRun[]>([]);
   const [selectedToolRunId, setSelectedToolRunId] = useState<number | null>(null);
   const [selectedToolRun, setSelectedToolRun] = useState<ToolRunDetail | null>(null);
+  const [toolWorkspaceView, setToolWorkspaceView] = useState<ToolWorkspaceView>('start');
   const [toolRunUploadFile, setToolRunUploadFile] = useState<File | null>(null);
   const [toolRunStartPage, setToolRunStartPage] = useState('1');
   const [toolRunEndPage, setToolRunEndPage] = useState('1');
   const [toolRunBusy, setToolRunBusy] = useState(false);
+  const [toolRunPdfUrl, setToolRunPdfUrl] = useState<string | null>(null);
+  const [toolRunPdfZoom, setToolRunPdfZoom] = useState(1);
+  const [toolRunPdfRotation, setToolRunPdfRotation] = useState(0);
+  const [toolMetadataDraft, setToolMetadataDraft] = useState<ToolMetadataDraft>({ taxYear: '', client: '', broker: '', accountLabel: '' });
+  const [toolMetadataDirty, setToolMetadataDirty] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createForm, setCreateForm] = useState({ username: '', password: '', role: 'staff' as UserRole, active: true });
@@ -547,6 +600,7 @@ function App() {
   const sidecarEnabled = isEnabled(settingDrafts.ocr_sidecar, true);
   const ocrTextHandling = resolveOcrTextHandling(settingDrafts);
   const ocrCommandPreview = buildOcrCommandPreview(settingDrafts);
+  const txfFilenamePreview = buildTxfFilename(toolMetadataDraft);
 
   const filteredDocuments = useMemo(
     () => documents.filter((document) => (documentStatusFilter === 'all' ? true : document.status === documentStatusFilter)),
@@ -711,6 +765,45 @@ function App() {
       setSelectedToolRun(null);
     }
   }, [selectedToolRunId]);
+
+  useEffect(() => {
+    setToolMetadataDraft(aggregate1099BMetadata(selectedToolRun));
+    setToolMetadataDirty(false);
+  }, [selectedToolRun?.run.id]);
+
+  useEffect(() => {
+    if (!token || !selectedToolRunId || toolWorkspaceView !== 'detail') {
+      setToolRunPdfUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return null;
+      });
+      return;
+    }
+
+    let canceled = false;
+    void apiBlob(`/api/tools/1099b/runs/${selectedToolRunId}/source`, token)
+      .then((blob) => {
+        if (canceled) return;
+        const nextUrl = URL.createObjectURL(blob);
+        setToolRunPdfUrl((current) => {
+          if (current) URL.revokeObjectURL(current);
+          return nextUrl;
+        });
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load source PDF'));
+
+    return () => {
+      canceled = true;
+    };
+  }, [token, selectedToolRunId, toolWorkspaceView]);
+
+  useEffect(() => {
+    if (!token || !selectedToolRunId || !toolMetadataDirty) return;
+    const timeout = window.setTimeout(() => {
+      void saveToolRunMetadata({ background: true });
+    }, 900);
+    return () => window.clearTimeout(timeout);
+  }, [token, selectedToolRunId, toolMetadataDirty, toolMetadataDraft]);
 
   useEffect(() => {
     if (!token) return;
@@ -1065,6 +1158,7 @@ function App() {
         }),
       }, token);
       setSelectedToolRunId(detail.run.id);
+      setToolWorkspaceView('detail');
       await loadData(token, { preserveSettingDrafts: true });
       setToolRunUploadFile(null);
       setSuccessMessage(`1099-B run #${detail.run.id} created for ${pageNumbers.length} page(s).`);
@@ -1073,6 +1167,46 @@ function App() {
     } finally {
       setToolRunBusy(false);
     }
+  }
+
+  async function saveToolRunMetadata(options: { background?: boolean } = {}) {
+    if (!token || !selectedToolRunId) return;
+    if (!options.background) {
+      setError(null);
+      setSuccessMessage(null);
+    }
+    try {
+      await api<{ run: ToolRun }>(`/api/tools/1099b/runs/${selectedToolRunId}/metadata`, {
+        method: 'PATCH',
+        body: JSON.stringify(toolMetadataDraft),
+      }, token);
+      setToolMetadataDirty(false);
+      await loadToolRun(selectedToolRunId, { background: true });
+      if (!options.background) {
+        setSuccessMessage('1099-B document metadata saved.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save 1099-B metadata');
+    }
+  }
+
+  async function reopenSelectedToolRun() {
+    if (!token || !selectedToolRunId) return;
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const detail = await api<ToolRunDetail>(`/api/tools/1099b/runs/${selectedToolRunId}/reopen`, { method: 'POST' }, token);
+      setSelectedToolRun(detail);
+      await loadData(token, { preserveSettingDrafts: true });
+      setSuccessMessage(`Run #${selectedToolRunId} reopened for review.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reopen 1099-B run');
+    }
+  }
+
+  function updateToolMetadataDraft(key: keyof ToolMetadataDraft, value: string) {
+    setToolMetadataDirty(true);
+    setToolMetadataDraft((current) => ({ ...current, [key]: value }));
   }
 
   async function saveReview(event: FormEvent) {
@@ -1332,6 +1466,20 @@ function App() {
                             )}
                           </label>
                         ))}
+                        <label className="grid gap-2 text-sm">
+                          <span className="text-slate-300">Simultaneous Job Execution</span>
+                          <input
+                            className="rounded-xl border border-line bg-[#09111d] px-3 py-2"
+                            disabled={!isAdmin}
+                            inputMode="numeric"
+                            max={10}
+                            min={1}
+                            type="number"
+                            value={settingDrafts.simultaneous_job_execution ?? '1'}
+                            onChange={(event) => setSettingDraftValue('simultaneous_job_execution', event.target.value)}
+                          />
+                          <span className="text-xs text-slate-500">Worker queue concurrency for extraction/OCR jobs. Maximum 10; default 1.</span>
+                        </label>
                       </div>
                     </div>
 
@@ -1391,6 +1539,7 @@ function App() {
                   <ul className="grid gap-3 text-sm text-slate-300">
                     <li>• Incoming, processed, review, clients, and originals paths are fixed by container/env configuration rather than editable in the UI.</li>
                     <li>• <span className="text-slate-100">OCR Mode</span> decides whether the worker runs bundled OCRmyPDF now or leaves the document parked for a future external OCR handoff.</li>
+                    <li>• <span className="text-slate-100">Simultaneous Job Execution</span> controls how many queued jobs the worker may process at once. Keep it at 1 until a single-page extractor run is clean.</li>
                     <li>• <span className="text-slate-100">deskew</span>, <span className="text-slate-100">rotate-pages</span>, and <span className="text-slate-100">rotate-pages-threshold</span> affect scan cleanup before review, especially for crooked or rotated pages.</li>
                     <li>• <span className="text-slate-100">jobs</span> controls OCRmyPDF parallelism inside the worker and is mainly a performance tuning lever.</li>
                     <li>• <span className="text-slate-100">sidecar</span> controls whether the worker captures extracted text for the review screen and downstream automation.</li>
@@ -1618,9 +1767,15 @@ function App() {
             {activeSection === 'admin' && !isAdmin ? <AdminAccessNotice /> : null}
             {activeSection === 'clients' ? <PlaceholderSection title="Clients" description="This area is reserved for client-facing workflow, filing organization, and future client record tools." /> : null}
             {activeSection === 'extractor1099b' ? (
-              <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-                <div className="grid gap-6">
-                  <Panel title="Create 1099-B to TXF run" subtitle="Upload a PDF and choose an inclusive page range for extraction.">
+              <section className="grid gap-6">
+                <div className="flex flex-wrap gap-2">
+                  <button className={`rounded-xl px-4 py-2 text-sm transition ${toolWorkspaceView === 'start' ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`} onClick={() => { setToolWorkspaceView('start'); setSelectedToolRunId(null); }} type="button">Load PDF</button>
+                  <button className={`rounded-xl px-4 py-2 text-sm transition ${toolWorkspaceView === 'recent' ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`} onClick={() => setToolWorkspaceView('recent')} type="button">Recent Documents</button>
+                  {selectedToolRun ? <button className={`rounded-xl px-4 py-2 text-sm transition ${toolWorkspaceView === 'detail' ? 'bg-accent text-white' : 'border border-line text-slate-300 hover:bg-white/5'}`} onClick={() => setToolWorkspaceView('detail')} type="button">Open Run #{selectedToolRun.run.id}</button> : null}
+                </div>
+
+                {toolWorkspaceView === 'start' ? (
+                  <Panel title="Start 1099-B extraction" subtitle="The PDF is stored only when Start Extraction is clicked.">
                     <form className="grid gap-4" onSubmit={create1099BRunSubmit}>
                       <label className="grid gap-2 text-sm">
                         <span className="text-slate-300">Source PDF</span>
@@ -1636,19 +1791,21 @@ function App() {
                           <input className="rounded-xl border border-line bg-[#0d1422] px-3 py-2" inputMode="numeric" placeholder="1" value={toolRunEndPage} onChange={(event) => setToolRunEndPage(event.target.value)} />
                         </label>
                       </div>
-                      <div className="text-xs text-slate-500">The uploaded PDF is stored for this tool run only. Use the same number in both fields to test a single page. Make sure AI Routing has a default provider set, unless you only have one connected provider with a configured model.</div>
-                      <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={toolRunBusy} type="submit">{toolRunBusy ? 'Creating run…' : 'Create run'}</button>
+                      <div className="text-xs text-slate-500">Use the same number in both fields to test a single page. Make sure AI Routing has a default provider set, unless you only have one connected provider with a configured model.</div>
+                      <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60" disabled={toolRunBusy} type="submit">{toolRunBusy ? 'Starting extraction…' : 'Start Extraction'}</button>
                     </form>
                   </Panel>
+                ) : null}
 
-                  <Panel title="Recent runs" subtitle="Latest 1099-B extraction runs and current status.">
+                {toolWorkspaceView === 'recent' ? (
+                  <Panel title="Recent Documents" subtitle="Load a previous 1099-B PDF into the extraction review workspace.">
                     <div className="grid gap-3">
                       {toolRuns.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No 1099-B runs yet.</div> : null}
                       {toolRuns.map((run) => (
-                        <button key={run.id} className={`rounded-2xl border px-4 py-4 text-left transition ${selectedToolRunId === run.id ? 'border-accent bg-accent/10' : 'border-line bg-[#0d1422] hover:bg-white/5'}`} onClick={() => setSelectedToolRunId(run.id)} type="button">
+                        <button key={run.id} className={`rounded-2xl border px-4 py-4 text-left transition ${selectedToolRunId === run.id ? 'border-accent bg-accent/10' : 'border-line bg-[#0d1422] hover:bg-white/5'}`} onClick={() => { setSelectedToolRunId(run.id); setToolWorkspaceView('detail'); }} type="button">
                           <div className="flex items-center justify-between gap-3">
                             <div>
-                              <div className="font-medium text-text">Run #{run.id} · {run.sourceFilename}</div>
+                              <div className="font-medium text-text">{run.sourceFilename}</div>
                               <div className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{run.status} · {run.pageCount ?? 0} page(s)</div>
                               {run.status === 'reviewing' ? <div className="mt-2 text-xs normal-case tracking-normal text-slate-400">Awaiting page review; ready/pending pages are expected.</div> : null}
                             </div>
@@ -1658,22 +1815,74 @@ function App() {
                       ))}
                     </div>
                   </Panel>
-                </div>
+                ) : null}
 
-                <div className="grid gap-6">
-                  <Panel title="Run detail" subtitle="Page-level progress and extracted OCR text for the selected run.">
+                {toolWorkspaceView === 'detail' ? (
+                  <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(480px,1fr)]">
+                    <Panel title="Document" subtitle={selectedToolRun?.run.sourceFilename ?? 'Select a recent document'}>
+                      {!selectedToolRun ? (
+                        <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">Select a recent document or load a PDF to start fresh.</div>
+                      ) : (
+                        <div className="grid gap-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button className="rounded-xl border border-line px-3 py-2 text-sm hover:bg-white/5" onClick={() => setToolRunPdfZoom((current) => Math.max(0.5, Number((current - 0.1).toFixed(2))))} type="button">-</button>
+                            <div className="rounded-xl border border-line px-3 py-2 text-sm text-slate-300">{Math.round(toolRunPdfZoom * 100)}%</div>
+                            <button className="rounded-xl border border-line px-3 py-2 text-sm hover:bg-white/5" onClick={() => setToolRunPdfZoom((current) => Math.min(2, Number((current + 0.1).toFixed(2))))} type="button">+</button>
+                            <button className="rounded-xl border border-line px-3 py-2 text-sm hover:bg-white/5" onClick={() => setToolRunPdfZoom(1)} type="button">Fit Width</button>
+                            <button className="rounded-xl border border-line px-3 py-2 text-sm hover:bg-white/5" onClick={() => setToolRunPdfRotation((current) => (current + 90) % 360)} type="button">Rotate</button>
+                          </div>
+                          <div className="h-[72vh] overflow-auto rounded-2xl border border-line bg-[#09111d]">
+                            {toolRunPdfUrl ? (
+                              <iframe
+                                className="h-full min-h-[720px] w-full origin-top-left bg-white"
+                                src={toolRunPdfUrl}
+                                style={{
+                                  transform: `scale(${toolRunPdfZoom}) rotate(${toolRunPdfRotation}deg)`,
+                                  width: `${100 / toolRunPdfZoom}%`,
+                                  height: `${100 / toolRunPdfZoom}%`,
+                                }}
+                                title="1099-B source PDF"
+                              />
+                            ) : (
+                              <div className="px-4 py-8 text-sm text-slate-400">Loading PDF…</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </Panel>
+
+                    <Panel title="Extraction" subtitle="AI-returned transaction data and editable document metadata.">
                     {!selectedToolRun ? (
                       <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">Select a run to inspect page progress and extracted results.</div>
                     ) : (
                       <div className="grid gap-4">
                         <div className="rounded-xl border border-line bg-[#0d1422] px-4 py-3 text-sm text-slate-300">
-                          <div><span className="text-slate-500">Run:</span> #{selectedToolRun.run.id}</div>
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div><span className="text-slate-500">Run:</span> #{selectedToolRun.run.id}</div>
+                            {selectedToolRun.run.status === 'completed' ? <button className="rounded-xl border border-line px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/5" onClick={() => void reopenSelectedToolRun()} type="button">Reopen</button> : null}
+                          </div>
                           <div><span className="text-slate-500">Source:</span> {selectedToolRun.run.sourceFilename}</div>
-                          <div><span className="text-slate-500">Path:</span> {selectedToolRun.run.sourcePath}</div>
                           <div><span className="text-slate-500">Pages:</span> {selectedToolRun.run.selectedPageRange || selectedToolRun.run.pageCount || 'n/a'}</div>
                           <div><span className="text-slate-500">Status:</span> {selectedToolRun.run.status}</div>
                           <div className="mt-2 text-xs text-slate-400">{toolRunStatusHelp(selectedToolRun.run.status)}</div>
                         </div>
+
+                        <div className="rounded-2xl border border-line bg-[#0d1422] p-4">
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <label className="grid gap-2 text-sm"><span className="text-slate-300">Tax year</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" value={toolMetadataDraft.taxYear} onChange={(event) => updateToolMetadataDraft('taxYear', event.target.value)} /></label>
+                            <label className="grid gap-2 text-sm"><span className="text-slate-300">Client</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" value={toolMetadataDraft.client} onChange={(event) => updateToolMetadataDraft('client', event.target.value)} /></label>
+                            <label className="grid gap-2 text-sm"><span className="text-slate-300">Broker</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" value={toolMetadataDraft.broker} onChange={(event) => updateToolMetadataDraft('broker', event.target.value)} /></label>
+                            <label className="grid gap-2 text-sm"><span className="text-slate-300">Account label</span><input className="rounded-xl border border-line bg-[#09111d] px-3 py-2" value={toolMetadataDraft.accountLabel} onChange={(event) => updateToolMetadataDraft('accountLabel', event.target.value)} /></label>
+                          </div>
+                          <div className="mt-3 rounded-xl border border-line bg-[#09111d] px-3 py-2 text-xs text-slate-300">
+                            TXF filename: <span className="text-slate-100">{txfFilenamePreview}</span>
+                          </div>
+                          <div className="mt-3 flex flex-wrap items-center gap-3">
+                            <button className="rounded-xl border border-line px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/5 disabled:opacity-50" disabled={!toolMetadataDirty} onClick={() => void saveToolRunMetadata()} type="button">Save Metadata</button>
+                            <span className="text-xs text-slate-500">{toolMetadataDirty ? 'Autosaving edits…' : 'Metadata saved'}</span>
+                          </div>
+                        </div>
+
                         <div className="grid gap-3">
                           {selectedToolRun.pages.length === 0 ? <div className="rounded-xl border border-dashed border-line px-4 py-8 text-sm text-slate-400">No pages have been queued for this run yet.</div> : null}
                           {selectedToolRun.pages.map((page) => {
@@ -1747,7 +1956,8 @@ function App() {
                       </div>
                     )}
                   </Panel>
-                </div>
+                  </section>
+                ) : null}
               </section>
             ) : null}
           </div>
